@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@keyframes gfkMarqueeLeft {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes gfkMarqueeRight {
+  0% {
+    transform: translate3d(-50%, 0, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.gfk-marquee-left-slow {
+  animation: gfkMarqueeLeft 65s linear infinite;
+}
+.gfk-marquee-left-normal {
+  animation: gfkMarqueeLeft 40s linear infinite;
+}
+.gfk-marquee-left-fast {
+  animation: gfkMarqueeLeft 24s linear infinite;
+}
+
+.gfk-marquee-right-slow {
+  animation: gfkMarqueeRight 65s linear infinite;
+}
+.gfk-marquee-right-normal {
+  animation: gfkMarqueeRight 40s linear infinite;
+}
+.gfk-marquee-right-fast {
+  animation: gfkMarqueeRight 24s linear infinite;
+}
+
+.gfk-marquee-track:hover {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gfk-marquee-left-slow,
+  .gfk-marquee-left-normal,
+  .gfk-marquee-left-fast,
+  .gfk-marquee-right-slow,
+  .gfk-marquee-right-normal,
+  .gfk-marquee-right-fast {
+    animation: none;
+  }
+}

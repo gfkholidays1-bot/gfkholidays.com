@@ -1,0 +1,6 @@
+{
+  "name": "GFK Holidays",
+  "description": "Premium B2B and B2C travel reservation, package, and agent management portal for Malaysia",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

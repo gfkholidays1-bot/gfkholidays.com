@@ -1,0 +1,223 @@
+{
+  "entities": {
+    "Package": {
+      "title": "Package",
+      "description": "Tour packages available for booking in Malaysia and region",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "destination": { "type": "string" },
+        "location": { "type": "string" },
+        "isMalaysia": { "type": "boolean" },
+        "priorityRank": { "type": "number" },
+        "duration": { "type": "string" },
+        "type": { "type": "string", "enum": ["tour", "activity"] },
+        "base_price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "badge": { "type": "string" },
+        "rating": { "type": "number" },
+        "reviewsCount": { "type": "number" },
+        "image": { "type": "string" },
+        "gallery": { "type": "array", "items": { "type": "string" } },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "itinerary": { "type": "array" },
+        "inclusions": { "type": "array", "items": { "type": "string" } },
+        "exclusions": { "type": "array", "items": { "type": "string" } },
+        "options": { "type": "array" }
+      },
+      "required": ["id", "title", "destination", "duration", "type", "base_price", "image"]
+    },
+    "TransportRoute": {
+      "title": "TransportRoute",
+      "description": "Transport routes and vehicle pricing across Malaysia",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "car": { "type": "number" },
+        "van": { "type": "number" },
+        "mpv": { "type": "number" },
+        "bus": { "type": "number" },
+        "image": { "type": "string" },
+        "gallery": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "name", "car", "van", "mpv", "bus", "image"]
+    },
+    "Hotel": {
+      "title": "Hotel",
+      "description": "Contracted Malaysia hotels and room categories",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "cat": { "type": "string" },
+        "location": { "type": "string" },
+        "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "contractBadge": { "type": "string" },
+        "rating": { "type": "number" },
+        "image": { "type": "string" },
+        "gallery": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "roomCategories": { "type": "array" },
+        "amenities": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "cat", "price", "image"]
+    },
+    "Ticket": {
+      "title": "Ticket",
+      "description": "Attraction tickets and Malaysia activity passes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "isMalaysia": { "type": "boolean" },
+        "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "badge": { "type": "string" },
+        "rating": { "type": "number" },
+        "reviewsCount": { "type": "number" },
+        "image": { "type": "string" },
+        "gallery": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "ticketCategories": { "type": "array" },
+        "timeSlots": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "price", "image"]
+    },
+    "Agent": {
+      "title": "Agent",
+      "description": "B2B Travel Agents",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "agency": { "type": "string" },
+        "wallet": { "type": "object" },
+        "commission": { "type": "number" },
+        "markup": { "type": "object" },
+        "documents": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["pending_verification", "verified", "rejected"] }
+      },
+      "required": ["id", "email", "agency", "wallet", "commission"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Customer and Agent Bookings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "agentId": { "type": "string" },
+        "pkgId": { "type": "string" },
+        "client": { "type": "string" },
+        "date": { "type": "string" },
+        "timeSlot": { "type": "string" },
+        "total": { "type": "number" },
+        "commission": { "type": "number" },
+        "status": { "type": "string", "enum": ["REQUEST_RECEIVED", "CONFIRMED_AWAITING_PAYMENT", "PAID", "COMPLETED", "CANCELLED"] },
+        "paymentMethod": { "type": "string", "enum": ["credit", "bank_transfer"] },
+        "paymentStatus": { "type": "string", "enum": ["UNPAID", "PENDING_BANK_TRANSFER", "PAID", "CREDIT_CHARGED"] },
+        "createdAt": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["id", "pkgId", "client", "date", "total", "commission", "status", "paymentMethod", "paymentStatus", "createdAt"]
+    },
+    "Allotment": {
+      "title": "Allotment",
+      "description": "Daily inventory allotments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "date": { "type": "string" },
+        "totalAllotment": { "type": "number" },
+        "booked": { "type": "number" },
+        "isClosed": { "type": "boolean" },
+        "closedTimeSlots": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "productId", "date", "totalAllotment", "booked", "isClosed"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Customer reviews for products",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "userName": { "type": "string" },
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "date": { "type": "string" },
+        "avatar": { "type": "string" }
+      },
+      "required": ["id", "productId", "userName", "rating", "comment", "date"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Global application, homepage CMS, brand logo, customer media, social channels, OTA supplier partnerships, and SEO settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "heroVideoUrl": { "type": "string" },
+        "heroBgColor": { "type": "string" },
+        "heroBadgeText": { "type": "string" },
+        "heroHeadlineSerif": { "type": "string" },
+        "heroHeadlineMain": { "type": "string" },
+        "heroSubheadline": { "type": "string" },
+        "customerMedia": { "type": "array" },
+        "customerMediaAnimation": { "type": "string" },
+        "customerMediaSpeed": { "type": "number" },
+        "customerMediaSectionTitle": { "type": "string" },
+        "customerMediaSectionSubtitle": { "type": "string" },
+        "socialChannels": { "type": "array" },
+        "otaPartners": { "type": "array" },
+        "otaSectionTitle": { "type": "string" },
+        "otaSectionSubtitle": { "type": "string" },
+        "hotelContractsTitle": { "type": "string" },
+        "hotelContractsSubtitle": { "type": "string" },
+        "hotelContractsPresentation": { "type": "string" },
+        "partnerReelStyle": { "type": "string" },
+        "partnerReelStageDuration": { "type": "number" },
+        "partnerReelBgVideoUrl": { "type": "string" },
+        "partnerReelAutoPlay": { "type": "boolean" },
+        "partnerReelShowHud": { "type": "boolean" },
+        "partnerReelTitle": { "type": "string" },
+        "partnerReelSubtitle": { "type": "string" },
+        "hotelPartnerLogos": { "type": "array" },
+        "flightPartnerLogos": { "type": "array" },
+        "seoTitle": { "type": "string" },
+        "seoDescription": { "type": "string" },
+        "seoKeywords": { "type": "string" },
+        "whatsappNumber": { "type": "string" },
+        "invoiceMessage": { "type": "string" },
+        "accountsEmail": { "type": "string" },
+        "bankAccountName": { "type": "string" },
+        "bankPartner": { "type": "string" },
+        "bankAccountNumber": { "type": "string" },
+        "partnerMarqueeEnabled": { "type": "boolean" },
+        "partnerMarqueeDirection": { "type": "string", "enum": ["left", "right"] },
+        "partnerMarqueeSpeed": { "type": "string", "enum": ["slow", "normal", "fast"] },
+        "partnerMarqueeLogos": { "type": "array" }
+      },
+      "required": ["id"]
+    }
+  },
+  "firestore": {
+    "packages": { "schema": "Package", "description": "Collection of tour packages" },
+    "transport": { "schema": "TransportRoute", "description": "Collection of transport routes" },
+    "hotels": { "schema": "Hotel", "description": "Collection of hotels" },
+    "tickets": { "schema": "Ticket", "description": "Collection of attraction tickets" },
+    "agents": { "schema": "Agent", "description": "Collection of B2B agents" },
+    "bookings": { "schema": "Booking", "description": "Collection of bookings" },
+    "allotments": { "schema": "Allotment", "description": "Collection of inventory allotments" },
+    "reviews": { "schema": "Review", "description": "Collection of product reviews" },
+    "settings": { "schema": "Setting", "description": "Collection of global settings and homepage CMS" }
+  }
+}
