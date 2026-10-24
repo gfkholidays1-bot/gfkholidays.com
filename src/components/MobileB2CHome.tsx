@@ -101,10 +101,6 @@ export default function MobileB2CHome({
   const [packageTab, setPackageTab] = useState<'itinerary' | 'terms'>('itinerary');
 
   const [activeFeaturedVideo, setActiveFeaturedVideo] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_featured_video_url') || localStorage.getItem('gfk_hero_video_url');
-      if (cached) return cached;
-    }
     return (
       globalSettings.featuredVideoEmbedUrl ||
       globalSettings.heroVideoUrl ||

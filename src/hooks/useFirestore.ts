@@ -145,64 +145,51 @@ function normalizeGlobalSettings(docData: any, defaults: any) {
 }
 
 export function useFirestoreCollection<T extends { id: string }>(collectionName: string, initialData: T[]) {
-  const [data, setData] = useState<T[]>(initialData);
-  const dataRef = useRef<T[]>(initialData);
+  const [data, setData] = useState<T[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem(`gfk_cache_${collectionName}`);
+        if (cached) return JSON.parse(cached);
+      } catch (_e) {}
+    }
+    return initialData;
+  });
+  const dataRef = useRef<T[]>(data);
 
   useEffect(() => {
     dataRef.current = data;
-  }, [data]);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(`gfk_cache_${collectionName}`, JSON.stringify(data));
+      } catch (_e) {}
+    }
+  }, [data, collectionName]);
+
+  // BroadcastChannel for instant cross-tab / cross-window sync
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(`gfk_sync_${collectionName}`);
+    
+    channel.onmessage = (event) => {
+      if (event.data && Array.isArray(event.data)) {
+        setData(event.data);
+        dataRef.current = event.data;
+      }
+    };
+
+    return () => {
+      channel.close();
+    };
+  }, [collectionName]);
 
   useEffect(() => {
     const db = getFirebaseFirestore();
     const colRef = collection(db, collectionName);
 
-    // Check if empty and seed initial data
-    getDocs(colRef)
-      .then((snap) => {
-        if (snap.empty && initialData.length > 0) {
-          const batch = writeBatch(db);
-          initialData.forEach((item: any) => {
-            const docRef = doc(db, collectionName, item.id);
-            batch.set(docRef, stripUndefined(item));
-          });
-          batch.commit().catch((err) => handleFirestoreError(err, OperationType.WRITE, collectionName));
-        } else if (collectionName === 'settings' && !snap.empty && initialData.length > 0) {
-          // Ensure newly added default fields in settings/global are initialized once if missing
-          const globalDoc = snap.docs.find((d) => d.id === 'global');
-          if (globalDoc) {
-            const existing = globalDoc.data();
-            const defaults = initialData[0] as any;
-            let needsMerge = false;
-            const merged = normalizeGlobalSettings(existing, defaults);
-
-            if (
-              existing.hotelPartnerLogos === undefined ||
-              existing.flightPartnerLogos === undefined ||
-              existing.partnerReelStyle === undefined ||
-              existing.partnerReelStageDuration === undefined ||
-              existing.customerMedia === undefined ||
-              existing.socialChannels === undefined ||
-              existing.otaPartners === undefined
-            ) {
-              needsMerge = true;
-            }
-
-            if (needsMerge) {
-              const batch = writeBatch(db);
-              batch.set(doc(db, 'settings', 'global'), stripUndefined(merged), { merge: true });
-              batch.commit().catch((err) => handleFirestoreError(err, OperationType.WRITE, 'settings/global'));
-            }
-          }
-        }
-      })
-      .catch((err) => handleFirestoreError(err, OperationType.GET, collectionName));
-
     const unsubscribe = onSnapshot(
       colRef,
       (snapshot) => {
-        if (snapshot.empty && initialData.length > 0) {
-          setData(initialData);
-          dataRef.current = initialData;
+        if (snapshot.empty) {
           return;
         }
         const items: any[] = [];
@@ -215,8 +202,15 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
             items.push({ ...docData, id: docSnap.id });
           }
         });
-        setData(items as T[]);
-        dataRef.current = items as T[];
+        if (items.length > 0) {
+          setData(items as T[]);
+          dataRef.current = items as T[];
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`gfk_cache_${collectionName}`, JSON.stringify(items));
+            } catch (_e) {}
+          }
+        }
       },
       (err) => handleFirestoreError(err, OperationType.GET, collectionName)
     );
@@ -235,6 +229,17 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
       // Update local state immediately for snappy UI
       setData(newData);
       dataRef.current = newData;
+
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`gfk_cache_${collectionName}`, JSON.stringify(newData));
+          if (typeof BroadcastChannel !== 'undefined') {
+            const channel = new BroadcastChannel(`gfk_sync_${collectionName}`);
+            channel.postMessage(newData);
+            channel.close();
+          }
+        } catch (_e) {}
+      }
 
       try {
         const db = getFirebaseFirestore();

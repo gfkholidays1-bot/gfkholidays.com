@@ -5,6 +5,7 @@ import { Agent } from '../types';
 interface HeaderProps {
   onRequestLogin?: (role: 'customer' | 'agent') => void;
   logoUrl?: string;
+  showBrandText?: boolean;
   userRole: 'guest' | 'customer' | 'agent' | 'admin';
   currentUser: Agent | null;
   onNavigate: (path: string, params?: any) => void;
@@ -17,6 +18,7 @@ export default function Header({
   onNavigate,
   onLoginAs,
   logoUrl,
+  showBrandText = true,
   onRequestLogin
 }: HeaderProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -26,29 +28,23 @@ export default function Header({
     setMobileMenuOpen(false);
   };
 
-  const [logoSettings, setLogoSettings] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_active_logo');
-      const validCached = cached && cached !== 'https://iili.io/ChVw1zF.png' && cached !== '/logo-transparent.svg' ? cached : null;
-      return {
-        url: validCached || logoUrl || '/logo-transparent.svg',
-        height: Number(localStorage.getItem('gfk_logo_height') || 54),
-        showBrandText: localStorage.getItem('gfk_show_brand_text') !== 'false'
-      };
-    }
-    return { url: logoUrl || '/logo-transparent.svg', height: 54, showBrandText: true };
-  });
+  const [logoSettings, setLogoSettings] = useState(() => ({
+    url: logoUrl || '/logo-transparent.svg',
+    height: 54,
+    showBrandText: showBrandText !== undefined ? showBrandText : true
+  }));
 
   useEffect(() => {
-    if (logoUrl && logoUrl !== 'https://iili.io/ChVw1zF.png' && logoUrl !== '/android-chrome-512x512.png') {
-      const cached = typeof window !== 'undefined' ? localStorage.getItem('gfk_active_logo') : null;
-      // Do not overwrite custom uploaded logo with the default vector logo or placeholder
-      if ((logoUrl === '/logo-transparent.svg' || logoUrl === '/android-chrome-512x512.png') && cached && cached !== '/logo-transparent.svg') {
-        return;
-      }
+    if (logoUrl) {
       setLogoSettings(prev => ({ ...prev, url: logoUrl }));
     }
   }, [logoUrl]);
+
+  useEffect(() => {
+    if (showBrandText !== undefined) {
+      setLogoSettings(prev => ({ ...prev, showBrandText }));
+    }
+  }, [showBrandText]);
 
   useEffect(() => {
     const handleLogoUpdate = (e: any) => {

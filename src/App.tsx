@@ -38,55 +38,9 @@ export default function App() {
   const [settings, setSettings] = useFirestoreCollection<GlobalSettings>('settings', [DEFAULT_GLOBAL_SETTINGS]);
 
   const rawGlobalSettings = settings.find(s => s.id === 'global');
-
-  // Reactive active logo state that immediately syncs with localStorage & CustomEvents
-  const [activeLogo, setActiveLogo] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_active_logo');
-      if (cached && cached !== 'https://iili.io/ChVw1zF.png' && cached !== '/android-chrome-512x512.png') return cached;
-    }
-    return rawGlobalSettings?.logoUrl && rawGlobalSettings.logoUrl !== 'https://iili.io/ChVw1zF.png' && rawGlobalSettings.logoUrl !== '/android-chrome-512x512.png'
-      ? rawGlobalSettings.logoUrl
-      : DEFAULT_GLOBAL_SETTINGS.logoUrl;
-  });
-
-  useEffect(() => {
-    const handleLogoUpdate = (e: any) => {
-      const newUrl = typeof e.detail === 'string' ? e.detail : e.detail?.logoUrl;
-      if (newUrl && newUrl !== 'https://iili.io/ChVw1zF.png' && newUrl !== '/android-chrome-512x512.png') {
-        setActiveLogo(newUrl);
-        try {
-          localStorage.setItem('gfk_active_logo', newUrl);
-        } catch (_e) {}
-      }
-    };
-    window.addEventListener('gfk-logo-updated', handleLogoUpdate);
-    return () => window.removeEventListener('gfk-logo-updated', handleLogoUpdate);
-  }, []);
-
-  useEffect(() => {
-    if (!rawGlobalSettings?.logoUrl || rawGlobalSettings.logoUrl === 'https://iili.io/ChVw1zF.png' || rawGlobalSettings.logoUrl === '/android-chrome-512x512.png') return;
-    const url = rawGlobalSettings.logoUrl;
-
-    if (url.startsWith('data:') || (url.startsWith('http') && url !== 'https://iili.io/ChVw1zF.png')) {
-      setActiveLogo(url);
-      try {
-        localStorage.setItem('gfk_active_logo', url);
-      } catch (_e) {}
-    } else {
-      const cached = typeof window !== 'undefined' ? localStorage.getItem('gfk_active_logo') : null;
-      if (cached && cached !== '/logo-transparent.svg' && cached !== 'https://iili.io/ChVw1zF.png' && cached !== '/android-chrome-512x512.png') {
-        setActiveLogo(cached);
-      } else {
-        setActiveLogo(url);
-      }
-    }
-  }, [rawGlobalSettings?.logoUrl]);
-
   const globalSettings: GlobalSettings = {
     ...DEFAULT_GLOBAL_SETTINGS,
-    ...(rawGlobalSettings || {}),
-    logoUrl: activeLogo
+    ...(rawGlobalSettings || {})
   };
 
   // 2. Navigation State Engine
@@ -428,6 +382,7 @@ export default function App() {
         onLoginAs={handleRoleLogin}
         onRequestLogin={setAuthModalRole}
         logoUrl={globalSettings.logoUrl}
+        showBrandText={globalSettings.showBrandText}
       />
 
       <AuthModal

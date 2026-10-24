@@ -98,12 +98,8 @@ export default function MalaysiaHome({
   const [heroMuted, setHeroMuted] = useState(true);
   const heroVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Active Hero & Featured Video state (loaded from IndexedDB or globalSettings)
+  // Active Hero & Featured Video state (loaded from globalSettings)
   const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_hero_video_url');
-      if (cached) return cached;
-    }
     return (
       settings.heroVideoUrl ||
       'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
@@ -111,10 +107,6 @@ export default function MalaysiaHome({
   });
 
   const [activeFeaturedVideoUrl, setActiveFeaturedVideoUrl] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_featured_video_url');
-      if (cached) return cached;
-    }
     return (
       settings.featuredVideoEmbedUrl ||
       'https://viddler.com/embed/player?id=20382&color=default'

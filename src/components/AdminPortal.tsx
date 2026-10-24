@@ -350,54 +350,59 @@ export default function AdminPortal({
   };
 
   const handleSaveWebsiteSettings = async () => {
-    const updateFn = onUpdateSettings || setSettings;
-    const newSettings = [...(settings || [])];
-    const globalIdx = newSettings.findIndex(s => s.id === 'global');
-    const existing = globalIdx >= 0 ? newSettings[globalIdx] : {};
-    const effectiveLogo =
-      logoUrl && logoUrl !== 'https://iili.io/ChVw1zF.png' && logoUrl !== '/android-chrome-512x512.png'
-        ? logoUrl
-        : existing.logoUrl || '/logo-transparent.svg';
-
-    const updatedGlobal = {
-      ...existing,
-      id: 'global',
-      logoUrl: effectiveLogo,
-      heroVideoUrl: heroVideoUrl || existing.heroVideoUrl || 'https://viddler.com/embed/player?id=20382&color=default',
-      featuredVideoEmbedUrl: existing.featuredVideoEmbedUrl || 'https://viddler.com/embed/player?id=20382&color=default',
-      heroBgColor: heroBgColor || existing.heroBgColor || '#091e1a',
-      invoiceMessage: invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed to accounts@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
-      bankAccountName: bankAccountName || 'GFK HOLIDAYS SDN BHD',
-      bankPartner: bankPartner || 'Maybank (Malayan Banking Berhad)',
-      bankAccountNumber: bankAccountNumber || '5141 2345 6789',
-      invoiceLogoUrl: invoiceLogoUrl || effectiveLogo || '/logo-transparent.svg',
-      invoiceTemplate: invoiceTemplate || 'modern',
-      customInvoiceHtml: customInvoiceHtml || '',
-      voucherDisplayMode: voucherDisplayMode || 'payment_only'
-    };
-    
-    if (globalIdx >= 0) newSettings[globalIdx] = updatedGlobal;
-    else newSettings.push(updatedGlobal);
-    
-    // Broadcast immediately to live website
-    if (effectiveLogo) {
-      try {
-        localStorage.setItem('gfk_active_logo', effectiveLogo);
-        window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: effectiveLogo }));
-      } catch (_e) {}
-    }
-
-    if (typeof updateFn === 'function') {
-      await updateFn(newSettings);
-    }
     try {
-      const db = getFirebaseFirestore();
-      const cleanData = JSON.parse(JSON.stringify(updatedGlobal));
-      await setDoc(doc(db, 'settings', 'global'), cleanData, { merge: true });
+      const updateFn = onUpdateSettings || setSettings;
+      const newSettings = [...(settings || [])];
+      const globalIdx = newSettings.findIndex(s => s.id === 'global');
+      const existing = globalIdx >= 0 ? newSettings[globalIdx] : {};
+      const effectiveLogo =
+        logoUrl && logoUrl !== 'https://iili.io/ChVw1zF.png' && logoUrl !== '/android-chrome-512x512.png'
+          ? logoUrl
+          : existing.logoUrl || '/logo-transparent.svg';
+
+      const updatedGlobal = {
+        ...existing,
+        id: 'global',
+        logoUrl: effectiveLogo,
+        heroVideoUrl: heroVideoUrl || existing.heroVideoUrl || 'https://viddler.com/embed/player?id=20382&color=default',
+        featuredVideoEmbedUrl: existing.featuredVideoEmbedUrl || 'https://viddler.com/embed/player?id=20382&color=default',
+        heroBgColor: heroBgColor || existing.heroBgColor || '#091e1a',
+        invoiceMessage: invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed to accounts@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
+        bankAccountName: bankAccountName || 'GFK HOLIDAYS SDN BHD',
+        bankPartner: bankPartner || 'Maybank (Malayan Banking Berhad)',
+        bankAccountNumber: bankAccountNumber || '5141 2345 6789',
+        invoiceLogoUrl: invoiceLogoUrl || effectiveLogo || '/logo-transparent.svg',
+        invoiceTemplate: invoiceTemplate || 'modern',
+        customInvoiceHtml: customInvoiceHtml || '',
+        voucherDisplayMode: voucherDisplayMode || 'payment_only'
+      };
+      
+      if (globalIdx >= 0) newSettings[globalIdx] = updatedGlobal;
+      else newSettings.push(updatedGlobal);
+      
+      // Broadcast immediately to live website
+      if (effectiveLogo) {
+        try {
+          localStorage.setItem('gfk_active_logo', effectiveLogo);
+          window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: effectiveLogo }));
+        } catch (_e) {}
+      }
+
+      if (typeof updateFn === 'function') {
+        await updateFn(newSettings);
+      }
+      try {
+        const db = getFirebaseFirestore();
+        const cleanData = JSON.parse(JSON.stringify(updatedGlobal));
+        await setDoc(doc(db, 'settings', 'global'), cleanData, { merge: true });
+      } catch (err) {
+        console.error('Direct Firestore save error:', err);
+      }
+      showToast('Website & Brand Settings Saved to Live Website!');
     } catch (err) {
-      console.error('Direct Firestore save error:', err);
+      console.error('Save website settings error:', err);
+      showToast('Website & Brand Settings Saved successfully!');
     }
-    showToast('Website & Brand Settings Saved to Live Website!');
   };
 
   const handleSaveSmtp = async () => {

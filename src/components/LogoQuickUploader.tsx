@@ -17,12 +17,6 @@ export default function LogoQuickUploader({
 }: LogoQuickUploaderProps) {
   // Active logo source
   const [activeLogo, setActiveLogo] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_active_logo');
-      if (cached && cached !== 'https://iili.io/ChVw1zF.png' && cached !== '/logo-transparent.svg') {
-        return cached;
-      }
-    }
     return currentLogoUrl || '/logo-transparent.svg';
   });
 

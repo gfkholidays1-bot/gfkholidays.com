@@ -38,19 +38,20 @@ const firebaseConfig = {
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
-// Extract databaseId if it exists
+
+// Extract databaseId and initialize Firestore correctly with named database support
 const databaseId = (firebaseConfig as any).firestoreDatabaseId;
 export const firestore = (() => {
   try {
-    return initializeFirestore(
-      app,
-      {
-        experimentalAutoDetectLongPolling: true,
-      },
-      databaseId
-    );
+    return getFirestore(app, databaseId);
   } catch (_e) {
-    return databaseId ? getFirestore(app, databaseId) : getFirestore(app);
+    try {
+      return initializeFirestore(app, {
+        experimentalAutoDetectLongPolling: true,
+      }, databaseId);
+    } catch (_e2) {
+      return getFirestore(app);
+    }
   }
 })();
 

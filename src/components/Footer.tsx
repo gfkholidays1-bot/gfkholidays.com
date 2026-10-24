@@ -18,10 +18,6 @@ export default function Footer({
   socialChannels = []
 }: FooterProps) {
   const [liveLogo, setLiveLogo] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('gfk_active_logo');
-      if (cached && cached !== 'https://iili.io/ChVw1zF.png') return cached;
-    }
     return logoUrl && logoUrl !== 'https://iili.io/ChVw1zF.png'
       ? logoUrl
       : '/logo-transparent.svg';
