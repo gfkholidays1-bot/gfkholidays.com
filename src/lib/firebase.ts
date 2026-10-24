@@ -3,17 +3,38 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChang
 import {
   initializeFirestore,
   getFirestore,
-  memoryLocalCache,
   setLogLevel as setFirestoreLogLevel
 } from 'firebase/firestore';
 import { setLogLevel } from 'firebase/app';
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfigFromJson from '../../firebase-applet-config.json';
 
 // Suppress verbose Firebase debug/offline logs
 try {
   setLogLevel('silent');
   setFirestoreLogLevel('silent');
 } catch (_e) {}
+
+const fallbackConfig = {
+  apiKey: "AIzaSyD4A1n6GAe81TplBXGgVorN7qowKCBqjvM",
+  authDomain: "gen-lang-client-0612324688.firebaseapp.com",
+  projectId: "gen-lang-client-0612324688",
+  storageBucket: "gen-lang-client-0612324688.firebasestorage.app",
+  messagingSenderId: "1095118801112",
+  appId: "1:1095118801112:web:1dfe10cbf4bfa0cecb6fad",
+  firestoreDatabaseId: "ai-studio-gfkholidays-415b8c9f-ece5-42b3-82d6-fea966b26d79"
+};
+
+const metaEnv = (typeof import.meta !== 'undefined' ? (import.meta as Record<string, any>).env : null) || {};
+
+const firebaseConfig = {
+  apiKey: metaEnv.VITE_FIREBASE_API_KEY || (firebaseConfigFromJson as any)?.apiKey || fallbackConfig.apiKey,
+  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || (firebaseConfigFromJson as any)?.authDomain || fallbackConfig.authDomain,
+  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || (firebaseConfigFromJson as any)?.projectId || fallbackConfig.projectId,
+  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || (firebaseConfigFromJson as any)?.storageBucket || fallbackConfig.storageBucket,
+  messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || (firebaseConfigFromJson as any)?.messagingSenderId || fallbackConfig.messagingSenderId,
+  appId: metaEnv.VITE_FIREBASE_APP_ID || (firebaseConfigFromJson as any)?.appId || fallbackConfig.appId,
+  firestoreDatabaseId: metaEnv.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (firebaseConfigFromJson as any)?.firestoreDatabaseId || fallbackConfig.firestoreDatabaseId
+};
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
@@ -24,7 +45,6 @@ export const firestore = (() => {
     return initializeFirestore(
       app,
       {
-        localCache: memoryLocalCache(),
         experimentalAutoDetectLongPolling: true,
       },
       databaseId
@@ -36,9 +56,6 @@ export const firestore = (() => {
 
 export const getFirebaseAuth = () => auth;
 export const getFirebaseFirestore = () => firestore;
-
-// Firestore initialized with long polling for maximum reliability in dev & preview
-
 
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/gmail.send');
