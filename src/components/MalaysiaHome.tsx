@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { loadVideoBlob } from '../lib/videoStorage';
+import {
+  loadVideoBlob,
+  getVideoSourceMode,
+  getUploadedServerVideoUrl,
+  isDirectVideoSource
+} from '../lib/videoStorage';
 import {
   Package,
   Ticket,
@@ -98,45 +103,51 @@ export default function MalaysiaHome({
   const [heroMuted, setHeroMuted] = useState(true);
   const heroVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Active Hero & Featured Video state (loaded from globalSettings)
-  const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(() => {
-    return (
-      settings.heroVideoUrl ||
-      'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
-    );
-  });
+  // Unified Active Hero & Featured Video state (strict upload priority over URL)
+  const resolvePreferredVideoUrl = (): string => {
+    const isUploadMode =
+      settings.heroVideoSource === 'upload' ||
+      settings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      getVideoSourceMode() === 'upload';
 
-  const [activeFeaturedVideoUrl, setActiveFeaturedVideoUrl] = useState<string>(() => {
-    return (
-      settings.featuredVideoEmbedUrl ||
-      'https://viddler.com/embed/player?id=20382&color=default'
-    );
-  });
+    if (isUploadMode) {
+      const serverUpload = getUploadedServerVideoUrl();
+      if (serverUpload) return serverUpload;
+      if (settings.heroVideoUrl?.startsWith('/api/cms-video/')) {
+        return settings.heroVideoUrl;
+      }
+    }
 
-  // Load videos from high-speed IndexedDB and listen for admin live updates
+    const rawUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
+    if (rawUrl && !rawUrl.includes('viddler.com')) {
+      return rawUrl;
+    }
+    return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+  };
+
+  const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(resolvePreferredVideoUrl);
+
+  // Load uploaded video from IndexedDB / Server if in upload mode, and listen for live Admin updates
   useEffect(() => {
     let isMounted = true;
 
-    // Load background video from IndexedDB
-    loadVideoBlob('hero_background_video').then((blobUrl) => {
-      if (isMounted && blobUrl) {
-        setActiveHeroVideoUrl(blobUrl);
-      }
-    });
+    const isUploadMode =
+      settings.heroVideoSource === 'upload' ||
+      settings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      getVideoSourceMode() === 'upload';
 
-    // Load featured attractions video from IndexedDB
-    loadVideoBlob('featured_attractions_video').then((blobUrl) => {
-      if (isMounted && blobUrl) {
-        setActiveFeaturedVideoUrl(blobUrl);
-      }
-    });
+    if (isUploadMode) {
+      loadVideoBlob('hero_background_video').then((blobUrl) => {
+        if (isMounted && blobUrl) {
+          setActiveHeroVideoUrl(blobUrl);
+        }
+      });
+    }
 
     const handleVideoUpdated = (event: any) => {
-      const { key, videoUrl } = event.detail || {};
-      if (key === 'hero_background_video') {
+      const { videoUrl } = event.detail || {};
+      if (videoUrl) {
         setActiveHeroVideoUrl(videoUrl);
-      } else if (key === 'featured_attractions_video') {
-        setActiveFeaturedVideoUrl(videoUrl);
       }
     };
 
@@ -160,26 +171,35 @@ export default function MalaysiaHome({
     }
   }, [activeHeroVideoUrl, heroMuted]);
 
-  // Update when settings props change from Firestore ONLY if not using a custom local blob
+  // Sync when settings props change from Server/Firestore, respecting upload priority
   useEffect(() => {
-    if (
-      settings.heroVideoUrl &&
-      settings.heroVideoUrl !== activeHeroVideoUrl &&
-      !activeHeroVideoUrl.startsWith('blob:')
-    ) {
-      setActiveHeroVideoUrl(settings.heroVideoUrl);
-    }
-  }, [settings.heroVideoUrl]);
+    const incomingUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
+    if (!incomingUrl) return;
 
-  useEffect(() => {
-    if (
-      settings.featuredVideoEmbedUrl &&
-      settings.featuredVideoEmbedUrl !== activeFeaturedVideoUrl &&
-      !activeFeaturedVideoUrl.startsWith('blob:')
-    ) {
-      setActiveFeaturedVideoUrl(settings.featuredVideoEmbedUrl);
+    // If incoming URL is a server-uploaded video (/api/cms-video/...), always apply it unless a local blob is already playing
+    if (incomingUrl.startsWith('/api/cms-video/')) {
+      if (!activeHeroVideoUrl.startsWith('blob:') && activeHeroVideoUrl !== incomingUrl) {
+        setActiveHeroVideoUrl(incomingUrl);
+      }
+      return;
     }
-  }, [settings.featuredVideoEmbedUrl]);
+
+    // CRITICAL: If an uploaded video file is active locally, DO NOT let an external URL override it
+    if (
+      getVideoSourceMode() === 'upload' ||
+      settings.heroVideoSource === 'upload' ||
+      activeHeroVideoUrl.startsWith('blob:') ||
+      activeHeroVideoUrl.startsWith('/api/cms-video/')
+    ) {
+      if (settings.heroVideoSource !== 'url') {
+        return;
+      }
+    }
+
+    if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeHeroVideoUrl) {
+      setActiveHeroVideoUrl(incomingUrl);
+    }
+  }, [settings.heroVideoUrl, settings.featuredVideoEmbedUrl, settings.heroVideoSource]);
 
   // Priority Malaysia Activities & Packages state
   const [activeCatalogTab, setActiveCatalogTab] = useState<'all' | 'packages' | 'tickets' | 'transport'>('all');
@@ -349,15 +369,10 @@ export default function MalaysiaHome({
             {(() => {
               const src =
                 activeHeroVideoUrl ||
-                settings.heroVideoUrl ||
-                'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
-              const isDirectVideo =
-                src.startsWith('blob:') ||
-                src.startsWith('data:video') ||
-                src.includes('.mp4') ||
-                src.includes('.webm') ||
-                src.includes('.mov') ||
-                src.includes('pixabay.com/video');
+                (settings.heroVideoUrl && !settings.heroVideoUrl.includes('viddler.com')
+                  ? settings.heroVideoUrl
+                  : 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4');
+              const isDirectVideo = isDirectVideoSource(src);
               if (isDirectVideo) {
                 return (
                   <video

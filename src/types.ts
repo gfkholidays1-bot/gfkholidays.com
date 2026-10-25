@@ -222,6 +222,8 @@ export interface GlobalSettings {
   showBrandText?: boolean;
   heroVideoUrl: string;
   featuredVideoEmbedUrl?: string;
+  heroVideoSource?: 'upload' | 'url';
+  heroVideoFileName?: string;
   heroFallbackImage?: string;
   heroBgColor: string;
   heroOverlayOpacity?: number;

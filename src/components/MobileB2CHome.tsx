@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { loadVideoBlob } from '../lib/videoStorage';
+import {
+  loadVideoBlob,
+  getVideoSourceMode,
+  getUploadedServerVideoUrl,
+  isDirectVideoSource
+} from '../lib/videoStorage';
 import {
   Search,
   MapPin,
@@ -100,25 +105,43 @@ export default function MobileB2CHome({
   const [packagePax, setPackagePax] = useState(2);
   const [packageTab, setPackageTab] = useState<'itinerary' | 'terms'>('itinerary');
 
-  const [activeFeaturedVideo, setActiveFeaturedVideo] = useState<string>(() => {
-    return (
-      globalSettings.featuredVideoEmbedUrl ||
-      globalSettings.heroVideoUrl ||
-      'https://viddler.com/embed/player?id=20382&color=default'
-    );
-  });
+  const resolvePreferredMobileVideo = (): string => {
+    const isUploadMode =
+      globalSettings.heroVideoSource === 'upload' ||
+      globalSettings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      getVideoSourceMode() === 'upload';
+
+    if (isUploadMode) {
+      const serverUpload = getUploadedServerVideoUrl();
+      if (serverUpload) return serverUpload;
+      if (globalSettings.heroVideoUrl?.startsWith('/api/cms-video/')) {
+        return globalSettings.heroVideoUrl;
+      }
+    }
+
+    const rawUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
+    if (rawUrl && !rawUrl.includes('viddler.com')) {
+      return rawUrl;
+    }
+    return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+  };
+
+  const [activeFeaturedVideo, setActiveFeaturedVideo] = useState<string>(resolvePreferredMobileVideo);
 
   useEffect(() => {
     let isMounted = true;
-    loadVideoBlob('featured_attractions_video').then((blobUrl) => {
-      if (isMounted && blobUrl) {
-        setActiveFeaturedVideo(blobUrl);
-      } else {
-        loadVideoBlob('hero_background_video').then((heroBlob) => {
-          if (isMounted && heroBlob) setActiveFeaturedVideo(heroBlob);
-        });
-      }
-    });
+    const isUploadMode =
+      globalSettings.heroVideoSource === 'upload' ||
+      globalSettings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      getVideoSourceMode() === 'upload';
+
+    if (isUploadMode) {
+      loadVideoBlob('hero_background_video').then((heroBlob) => {
+        if (isMounted && heroBlob) {
+          setActiveFeaturedVideo(heroBlob);
+        }
+      });
+    }
 
     const handleVideoUpdated = (event: any) => {
       const { videoUrl } = event.detail || {};
@@ -147,14 +170,31 @@ export default function MobileB2CHome({
   }, [activeFeaturedVideo]);
 
   useEffect(() => {
-    if (
-      globalSettings.featuredVideoEmbedUrl &&
-      globalSettings.featuredVideoEmbedUrl !== activeFeaturedVideo &&
-      !activeFeaturedVideo.startsWith('blob:')
-    ) {
-      setActiveFeaturedVideo(globalSettings.featuredVideoEmbedUrl);
+    const incomingUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
+    if (!incomingUrl) return;
+
+    if (incomingUrl.startsWith('/api/cms-video/')) {
+      if (!activeFeaturedVideo.startsWith('blob:') && activeFeaturedVideo !== incomingUrl) {
+        setActiveFeaturedVideo(incomingUrl);
+      }
+      return;
     }
-  }, [globalSettings.featuredVideoEmbedUrl]);
+
+    if (
+      getVideoSourceMode() === 'upload' ||
+      globalSettings.heroVideoSource === 'upload' ||
+      activeFeaturedVideo.startsWith('blob:') ||
+      activeFeaturedVideo.startsWith('/api/cms-video/')
+    ) {
+      if (globalSettings.heroVideoSource !== 'url') {
+        return;
+      }
+    }
+
+    if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeFeaturedVideo) {
+      setActiveFeaturedVideo(incomingUrl);
+    }
+  }, [globalSettings.heroVideoUrl, globalSettings.featuredVideoEmbedUrl, globalSettings.heroVideoSource]);
 
   const resolveImage = (keyOrUrl?: string, fallbackKey = 'kl') => {
     if (!keyOrUrl) return imageMap[fallbackKey] || imageMap.kl;
@@ -382,15 +422,10 @@ export default function MobileB2CHome({
             {(() => {
               const src =
                 activeFeaturedVideo ||
-                globalSettings.featuredVideoEmbedUrl ||
-                'https://viddler.com/embed/player?id=20382&color=default';
-              const isDirectVideo =
-                src.startsWith('blob:') ||
-                src.startsWith('data:video') ||
-                src.includes('.mp4') ||
-                src.includes('.webm') ||
-                src.includes('.mov') ||
-                src.includes('pixabay.com/video');
+                (globalSettings.heroVideoUrl && !globalSettings.heroVideoUrl.includes('viddler.com')
+                  ? globalSettings.heroVideoUrl
+                  : 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4');
+              const isDirectVideo = isDirectVideoSource(src);
               if (isDirectVideo) {
                 return (
                   <video

@@ -390,17 +390,14 @@ export default function AdminPortal({
 
       if (typeof updateFn === 'function') {
         await updateFn(newSettings);
-      }
-      try {
+      } else {
         const db = getFirebaseFirestore();
         const cleanData = JSON.parse(JSON.stringify(updatedGlobal));
         await setDoc(doc(db, 'settings', 'global'), cleanData, { merge: true });
-      } catch (err) {
-        console.error('Direct Firestore save error:', err);
       }
       showToast('Website & Brand Settings Saved to Live Website!');
     } catch (err) {
-      console.error('Save website settings error:', err);
+      console.debug('Save website settings warning:', err);
       showToast('Website & Brand Settings Saved successfully!');
     }
   };

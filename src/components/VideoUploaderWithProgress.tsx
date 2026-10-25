@@ -13,7 +13,6 @@ import {
   Sparkles,
   Lock,
   RefreshCw,
-  Check,
   X
 } from 'lucide-react';
 import {
@@ -26,16 +25,27 @@ import {
   clearAllStoredVideos,
   auditStoredVideos,
   purgeAllVideoStorage,
+  getVideoSourceMode,
+  setVideoSourceMode,
+  isDirectVideoSource,
   DEFAULT_SCENIC_HERO_VIDEO,
   StoredVideoItem,
   StorageAuditResult
 } from '../lib/videoStorage';
 
+export interface VideoAppliedMetadata {
+  sourceMode: 'upload' | 'url';
+  fileName?: string;
+  serverUrl?: string | null;
+}
+
 interface VideoUploaderWithProgressProps {
   label: string;
   storageKey: 'hero_background_video' | 'featured_attractions_video';
   currentVideoUrl: string;
-  onVideoApplied: (videoUrl: string) => void;
+  currentVideoSource?: 'upload' | 'url';
+  currentVideoFileName?: string;
+  onVideoApplied: (videoUrl: string, meta?: VideoAppliedMetadata) => void;
   showToast: (msg: string) => void;
   description?: string;
   presets?: Array<{ label: string; url: string }>;
@@ -46,19 +56,54 @@ export default function VideoUploaderWithProgress({
   label,
   storageKey,
   currentVideoUrl,
+  currentVideoSource,
+  currentVideoFileName,
   onVideoApplied,
   showToast,
   description,
   presets = [],
   defaultFallbackUrl = DEFAULT_SCENIC_HERO_VIDEO
 }: VideoUploaderWithProgressProps) {
-  // 1-Click Mode: 'upload' | 'url' | 'library' | 'storage_audit'
+  const [activeSourceMode, setActiveSourceMode] = useState<'upload' | 'url'>(() => {
+    if (currentVideoSource === 'upload' || currentVideoUrl?.startsWith('/api/cms-video/')) {
+      return 'upload';
+    }
+    return getVideoSourceMode();
+  });
+
+  // Default tab matches active source mode so there is zero confusion
   const [inputMode, setInputMode] = useState<'upload' | 'url' | 'library' | 'storage_audit'>('upload');
 
-  const [activeUrl, setActiveUrl] = useState<string>(currentVideoUrl || defaultFallbackUrl);
-  const [urlInput, setUrlInput] = useState<string>(
-    currentVideoUrl && !currentVideoUrl.startsWith('blob:') ? currentVideoUrl : ''
-  );
+  const sanitizeInitialUrl = (raw?: string): string => {
+    if (!raw || raw.includes('viddler.com')) {
+      return defaultFallbackUrl;
+    }
+    return raw;
+  };
+
+  const [activeUrl, setActiveUrl] = useState<string>(() => sanitizeInitialUrl(currentVideoUrl));
+  const [activeFileName, setActiveFileName] = useState<string>(() => {
+    if (currentVideoFileName) return currentVideoFileName;
+    try {
+      return localStorage.getItem('gfk_video_name_hero_background_video') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  // Keep URL input box separate so an external URL never overwrites an uploaded video
+  const [urlInput, setUrlInput] = useState<string>(() => {
+    if (
+      currentVideoUrl &&
+      !currentVideoUrl.startsWith('blob:') &&
+      !currentVideoUrl.startsWith('/api/cms-video/') &&
+      !currentVideoUrl.includes('viddler.com')
+    ) {
+      return currentVideoUrl;
+    }
+    return '';
+  });
+
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
@@ -78,13 +123,11 @@ export default function VideoUploaderWithProgress({
   const [auditData, setAuditData] = useState<StorageAuditResult | null>(null);
   const [isAuditing, setIsAuditing] = useState<boolean>(false);
 
-  // Refresh stored video list from storage
   const refreshLibrary = () => {
     const list = getStoredVideosList(storageKey);
     setStoredList(list);
   };
 
-  // Run audit to check previous videos in IndexedDB & localStorage
   const runStorageAudit = async () => {
     setIsAuditing(true);
     try {
@@ -97,15 +140,29 @@ export default function VideoUploaderWithProgress({
     }
   };
 
-  // Load from IndexedDB or initial prop on mount
+  // Load uploaded video from IndexedDB / Server on mount if source mode is 'upload'
   useEffect(() => {
     let isMounted = true;
-    loadVideoBlob(storageKey).then((savedObjectUrl) => {
-      if (isMounted && savedObjectUrl) {
-        setActiveUrl(savedObjectUrl);
-        onVideoApplied(savedObjectUrl);
-      }
-    });
+    const mode =
+      currentVideoSource === 'upload' || currentVideoUrl?.startsWith('/api/cms-video/')
+        ? 'upload'
+        : getVideoSourceMode();
+
+    if (mode === 'upload') {
+      loadVideoBlob(storageKey).then((savedObjectUrl) => {
+        if (!isMounted) return;
+        if (savedObjectUrl) {
+          setActiveSourceMode('upload');
+          setActiveUrl(savedObjectUrl);
+        } else if (currentVideoUrl?.startsWith('/api/cms-video/')) {
+          setActiveSourceMode('upload');
+          setActiveUrl(currentVideoUrl);
+        }
+      });
+    } else if (currentVideoUrl && !currentVideoUrl.startsWith('blob:')) {
+      setActiveUrl(sanitizeInitialUrl(currentVideoUrl));
+    }
+
     refreshLibrary();
     runStorageAudit();
     return () => {
@@ -113,13 +170,33 @@ export default function VideoUploaderWithProgress({
     };
   }, [storageKey]);
 
-  // Sync external currentVideoUrl if updated
+  // Sync external currentVideoUrl ONLY when in 'url' mode or if the incoming URL is a server-uploaded video
   useEffect(() => {
-    if (currentVideoUrl && !currentVideoUrl.startsWith('blob:')) {
+    if (!currentVideoUrl) return;
+
+    // If the incoming URL is an uploaded server video (/api/cms-video/...), always honor it as 'upload'
+    if (currentVideoUrl.startsWith('/api/cms-video/')) {
+      setActiveSourceMode('upload');
+      if (!activeUrl.startsWith('blob:')) {
+        setActiveUrl(currentVideoUrl);
+      }
+      if (currentVideoFileName) {
+        setActiveFileName(currentVideoFileName);
+      }
+      return;
+    }
+
+    // CRITICAL FIX: If an uploaded video file is active, DO NOT let an external URL overwrite it!
+    const currentMode = getVideoSourceMode();
+    if (currentMode === 'upload' || activeSourceMode === 'upload' || currentVideoSource === 'upload') {
+      return;
+    }
+
+    if (!currentVideoUrl.startsWith('blob:') && !currentVideoUrl.includes('viddler.com')) {
       setActiveUrl(currentVideoUrl);
       setUrlInput(currentVideoUrl);
     }
-  }, [currentVideoUrl]);
+  }, [currentVideoUrl, currentVideoSource, currentVideoFileName]);
 
   // Handle local video file upload with real-time percentage progress
   const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,12 +220,11 @@ export default function VideoUploaderWithProgress({
     setUploadSuccess(false);
     setUploadStatus(`Preparing to upload ${file.name} (${totalSizeMb} MB)...`);
 
-    // FileReader tracks exact percentage progress
     const reader = new FileReader();
 
     reader.onprogress = (event) => {
       if (event.lengthComputable) {
-        const percent = Math.min(99, Math.round((event.loaded / event.total) * 100));
+        const percent = Math.min(95, Math.round((event.loaded / event.total) * 95));
         const currentLoadedMb = (event.loaded / (1024 * 1024)).toFixed(1);
         setUploadProgress(percent);
         setFileStats({
@@ -156,38 +232,50 @@ export default function VideoUploaderWithProgress({
           sizeMb: totalSizeMb,
           loadedMb: currentLoadedMb
         });
-        setUploadStatus(`Uploading video file: ${percent}% (${currentLoadedMb} MB of ${totalSizeMb} MB)`);
+        setUploadStatus(`Reading video file: ${percent}% (${currentLoadedMb} MB of ${totalSizeMb} MB)`);
       }
     };
 
     reader.onload = async () => {
-      setUploadProgress(100);
-      setUploadStatus(`Saving video to high-speed storage (100%)...`);
+      setUploadProgress(98);
+      setUploadStatus(`Saving video to server & high-speed storage...`);
 
       try {
-        const objectUrl = await saveVideoBlob(storageKey, file);
+        const { playbackUrl, serverUrl, fileName } = await saveVideoBlob(storageKey, file, file.name);
 
-        setActiveUrl(objectUrl);
+        setUploadProgress(100);
+        setActiveSourceMode('upload');
+        setActiveFileName(fileName);
+        setActiveUrl(playbackUrl);
+        // Clear URL input box so URL never conflicts with uploaded file
         setUrlInput('');
         setIsUploading(false);
         setUploadSuccess(true);
-        setUploadStatus(`Upload Complete (100%)! Video is active & locked.`);
+        setUploadStatus(
+          `Uploaded "${fileName}" (100%)! Uploaded video is now priority-locked & playing live on Desktop & Mobile.`
+        );
         refreshLibrary();
         runStorageAudit();
 
-        // Broadcast event so homepage hero video immediately updates
+        // Broadcast event so homepage hero & mobile video immediately update
         window.dispatchEvent(
           new CustomEvent('gfk-video-updated', {
             detail: {
-              key: storageKey,
-              videoUrl: objectUrl,
-              fileName: file.name
+              key: 'hero_background_video',
+              videoUrl: playbackUrl,
+              serverUrl,
+              sourceMode: 'upload',
+              fileName
             }
           })
         );
 
-        onVideoApplied(objectUrl);
-        showToast(`Video "${file.name}" uploaded successfully (100%) and set as active background!`);
+        onVideoApplied(serverUrl || playbackUrl, {
+          sourceMode: 'upload',
+          fileName,
+          serverUrl
+        });
+        showToast(`Video "${fileName}" uploaded (100%) and set as active Hero & Featured video!`);
       } catch (err: any) {
         console.error('Failed to save video:', err);
         setIsUploading(false);
@@ -206,57 +294,73 @@ export default function VideoUploaderWithProgress({
     e.target.value = '';
   };
 
-  // Apply custom URL or preset
-  const handleApplyUrl = (urlToApply = urlInput, label?: string) => {
-    if (!urlToApply.trim()) {
+  // Apply custom URL or preset (explicitly switches priority from Upload to URL)
+  const handleApplyUrl = async (urlToApply = urlInput, presetLabel?: string) => {
+    const cleanUrl = urlToApply.trim();
+    if (!cleanUrl) {
       showToast('Please enter a valid video URL');
       return;
     }
 
-    registerUrlInLibrary(storageKey, urlToApply, label);
-    setActiveUrl(urlToApply);
-    setUrlInput(urlToApply);
+    await registerUrlInLibrary(storageKey, cleanUrl, presetLabel);
+    setVideoSourceMode('url');
+    setActiveSourceMode('url');
+    setActiveFileName('');
+    setActiveUrl(cleanUrl);
+    setUrlInput(cleanUrl);
     setUploadSuccess(true);
-    setUploadStatus('Video URL applied and saved to library!');
+    setUploadStatus('Video URL applied & active across Desktop & Mobile!');
     refreshLibrary();
     runStorageAudit();
 
     window.dispatchEvent(
       new CustomEvent('gfk-video-updated', {
         detail: {
-          key: storageKey,
-          videoUrl: urlToApply
+          key: 'hero_background_video',
+          videoUrl: cleanUrl,
+          sourceMode: 'url'
         }
       })
     );
 
-    onVideoApplied(urlToApply);
-    showToast('Video link applied live!');
+    onVideoApplied(cleanUrl, { sourceMode: 'url' });
+    showToast('Video URL applied live to Homepage!');
   };
 
   // Activate an existing video from library
   const handleActivateVideo = async (item: StoredVideoItem) => {
     try {
-      const activeUrl = await activateStoredVideo(item, storageKey);
-      if (activeUrl) {
-        setActiveUrl(activeUrl);
+      const result = await activateStoredVideo(item, storageKey);
+      if (result) {
+        setActiveSourceMode(result.sourceMode);
+        setActiveFileName(result.sourceMode === 'upload' ? result.fileName : '');
+        setActiveUrl(result.activeUrl);
+        if (result.sourceMode === 'url') {
+          setUrlInput(result.activeUrl);
+        } else {
+          setUrlInput('');
+        }
         setUploadSuccess(true);
-        setUploadStatus(`"${item.name}" is now the active video.`);
+        setUploadStatus(`"${item.name}" is now the active Homepage video.`);
         refreshLibrary();
         runStorageAudit();
 
         window.dispatchEvent(
           new CustomEvent('gfk-video-updated', {
             detail: {
-              key: storageKey,
-              videoUrl: activeUrl,
-              fileName: item.name
+              key: 'hero_background_video',
+              videoUrl: result.activeUrl,
+              sourceMode: result.sourceMode,
+              fileName: result.fileName
             }
           })
         );
 
-        onVideoApplied(activeUrl);
-        showToast(`Switched active background to "${item.name}"!`);
+        onVideoApplied(result.activeUrl, {
+          sourceMode: result.sourceMode,
+          fileName: result.fileName
+        });
+        showToast(`Switched active video to "${item.name}"!`);
       }
     } catch (_e) {
       showToast('Could not activate video.');
@@ -272,25 +376,27 @@ export default function VideoUploaderWithProgress({
       runStorageAudit();
 
       if (wasActive) {
-        // Fallback to default scenic video if active was deleted
+        setActiveSourceMode('url');
+        setActiveFileName('');
         setActiveUrl(defaultFallbackUrl);
         setUrlInput(defaultFallbackUrl);
 
         window.dispatchEvent(
           new CustomEvent('gfk-video-updated', {
             detail: {
-              key: storageKey,
-              videoUrl: defaultFallbackUrl
+              key: 'hero_background_video',
+              videoUrl: defaultFallbackUrl,
+              sourceMode: 'url'
             }
           })
         );
 
-        onVideoApplied(defaultFallbackUrl);
-        showToast(`"${item.name}" deleted. Reset active background to default scenic video.`);
+        onVideoApplied(defaultFallbackUrl, { sourceMode: 'url' });
+        showToast(`"${item.name}" deleted. Reset active video to default scenic Malaysia video.`);
       } else {
         showToast(`"${item.name}" deleted from video storage.`);
       }
-    } catch (err: any) {
+    } catch (_err: any) {
       showToast('Error deleting video.');
     }
   };
@@ -301,42 +407,48 @@ export default function VideoUploaderWithProgress({
     await clearAllStoredVideos(storageKey);
     refreshLibrary();
     runStorageAudit();
+    setActiveSourceMode('url');
+    setActiveFileName('');
     setActiveUrl(defaultFallbackUrl);
     setUrlInput(defaultFallbackUrl);
 
     window.dispatchEvent(
       new CustomEvent('gfk-video-updated', {
         detail: {
-          key: storageKey,
-          videoUrl: defaultFallbackUrl
+          key: 'hero_background_video',
+          videoUrl: defaultFallbackUrl,
+          sourceMode: 'url'
         }
       })
     );
 
-    onVideoApplied(defaultFallbackUrl);
+    onVideoApplied(defaultFallbackUrl, { sourceMode: 'url' });
     showToast('All saved videos deleted. Reset to default scenic video.');
   };
 
-  // Master Deep Purge of ALL storage (both IndexedDB database & localStorage)
+  // Master Deep Purge of ALL storage
   const executeMasterPurge = async () => {
     setShowPurgeConfirm(false);
     const { purgedCount } = await purgeAllVideoStorage();
     refreshLibrary();
     runStorageAudit();
+    setActiveSourceMode('url');
+    setActiveFileName('');
     setActiveUrl(defaultFallbackUrl);
     setUrlInput(defaultFallbackUrl);
 
     window.dispatchEvent(
       new CustomEvent('gfk-video-updated', {
         detail: {
-          key: storageKey,
-          videoUrl: defaultFallbackUrl
+          key: 'hero_background_video',
+          videoUrl: defaultFallbackUrl,
+          sourceMode: 'url'
         }
       })
     );
 
-    onVideoApplied(defaultFallbackUrl);
-    showToast(`Storage Purged (${purgedCount} items removed)! All previous videos deleted.`);
+    onVideoApplied(defaultFallbackUrl, { sourceMode: 'url' });
+    showToast(`Storage Purged (${purgedCount} items removed)! Reset to default video.`);
   };
 
   return (
@@ -359,15 +471,31 @@ export default function VideoUploaderWithProgress({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {uploadSuccess && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-black text-emerald-700 bg-emerald-100 border border-emerald-300 px-3 py-1 rounded-full shrink-0">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Live &amp; Playing
-            </span>
-          )}
-          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-zinc-700 bg-zinc-200/70 border border-zinc-300 px-2.5 py-1 rounded-full shrink-0">
-            <Lock className="w-3 h-3 text-emerald-700" /> Locked (No Customer Scrubbing)
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1 rounded-lg border shrink-0 ${
+              activeSourceMode === 'upload'
+                ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                : 'bg-blue-50 text-blue-900 border-blue-200'
+            }`}
+          >
+            {activeSourceMode === 'upload' ? (
+              <>
+                <Upload className="w-3.5 h-3.5 text-emerald-700" />
+                <span>Priority Active: Uploaded File {activeFileName ? `(${activeFileName})` : ''}</span>
+              </>
+            ) : (
+              <>
+                <ExternalLink className="w-3.5 h-3.5 text-blue-700" />
+                <span>Active Source: Video URL</span>
+              </>
+            )}
           </span>
+
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-zinc-700 bg-zinc-200/70 border border-zinc-300 px-2.5 py-1 rounded-lg shrink-0">
+            <Lock className="w-3 h-3 text-emerald-700" /> Locked Loop
+          </span>
+
           <button
             type="button"
             onClick={() => setShowStorageExplainer(!showStorageExplainer)}
@@ -386,7 +514,7 @@ export default function VideoUploaderWithProgress({
           <div className="flex items-center justify-between">
             <span className="font-black flex items-center gap-1.5 text-blue-900">
               <HardDrive className="w-4 h-4 text-blue-700" />
-              Where do uploaded videos go &amp; how are they managed?
+              How Unified Video Priority &amp; Storage Work
             </span>
             <button
               type="button"
@@ -397,13 +525,10 @@ export default function VideoUploaderWithProgress({
             </button>
           </div>
           <p className="text-[11px] text-blue-900/90 leading-relaxed font-medium">
-            <strong>1. Uploaded Video Files:</strong> Saved directly in your browser&apos;s local high-speed database (<strong>IndexedDB</strong> under database <code>gfk_video_storage_db</code>). This gives full HD/4K playback with zero buffering and bypasses Firestore cloud document size limits (1MB).
+            <strong>1. Unified Hero &amp; Featured Video:</strong> A single video setting controls both the Desktop Hero Background and the Mobile Featured Video player simultaneously.
           </p>
           <p className="text-[11px] text-blue-900/90 leading-relaxed font-medium">
-            <strong>2. Do older videos still get stored when changed?</strong> Yes, older videos remain in your local storage so you can switch between them. You can delete older videos individually in the <strong>Saved Videos</strong> tab or click <strong>Check &amp; Purge Storage</strong> to delete all previous files in 1 click.
-          </p>
-          <p className="text-[11px] text-blue-900/90 leading-relaxed font-medium">
-            <strong>3. Customer Video Locking:</strong> On the customer-facing website and mobile views, all scrubber timeline bars, backward/forward controls, and context menus are locked and disabled so customers see a clean continuous background loop without scrubbing.
+            <strong>2. Strict Upload Priority (No URL Conflict):</strong> When you upload a video file from your computer, the system locks priority to <strong>Uploaded File</strong> and saves it to both the server and local IndexedDB. External URLs will never override your uploaded video unless you explicitly click <strong>Apply URL</strong> in the Enter URL tab.
           </p>
         </div>
       )}
@@ -411,7 +536,7 @@ export default function VideoUploaderWithProgress({
       {/* ONE-CLICK MODE SWITCHER (Segmented Control) */}
       <div className="space-y-1.5">
         <label className="block text-xs font-black text-zinc-800 uppercase tracking-wider">
-          Choose How to Add or Manage Background Video:
+          Choose Video Source (Upload File vs. Direct Video URL):
         </label>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 bg-zinc-200/80 rounded-2xl max-w-2xl">
           <button
@@ -424,7 +549,7 @@ export default function VideoUploaderWithProgress({
             }`}
           >
             <Upload className="w-4 h-4 text-emerald-700" />
-            <span>Upload File</span>
+            <span>1. Upload File</span>
           </button>
 
           <button
@@ -437,7 +562,7 @@ export default function VideoUploaderWithProgress({
             }`}
           >
             <ExternalLink className="w-4 h-4 text-emerald-700" />
-            <span>Enter URL</span>
+            <span>2. Enter URL</span>
           </button>
 
           <button
@@ -474,9 +599,16 @@ export default function VideoUploaderWithProgress({
       {/* MODE 1: DIRECT FILE UPLOAD */}
       {inputMode === 'upload' && (
         <div className="space-y-3 animate-fade-in">
-          <label className="block text-xs font-bold text-zinc-700">
-            Upload Video File from Computer (.mp4, .webm, .mov)
-          </label>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <label className="block text-xs font-bold text-zinc-700">
+              Upload Video File from Computer (.mp4, .webm, .mov) — Automatically Takes Priority Over Any URL
+            </label>
+            {activeSourceMode === 'upload' && (
+              <span className="text-[11px] font-black text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-md">
+                Uploaded Video Currently Active
+              </span>
+            )}
+          </div>
 
           <label
             className={`flex flex-col items-center justify-center gap-2.5 w-full p-6 border-2 border-dashed rounded-2xl text-xs font-bold cursor-pointer transition-all ${
@@ -492,10 +624,10 @@ export default function VideoUploaderWithProgress({
             />
             <div className="text-center">
               <span className="block text-sm text-zinc-900 font-black">
-                {isUploading ? 'Uploading Video File...' : 'Click to Choose Video File from Device'}
+                {isUploading ? 'Uploading & Activating Video File...' : 'Click to Choose Video File from Device'}
               </span>
               <span className="block text-xs text-zinc-500 font-medium mt-1">
-                Supports HD / 4K MP4, WebM, and MOV files
+                Supports HD / 4K MP4, WebM, and MOV files • Plays immediately on Desktop Hero &amp; Mobile
               </span>
             </div>
             <input
@@ -520,7 +652,6 @@ export default function VideoUploaderWithProgress({
                 </span>
               </div>
 
-              {/* Progress Bar Track */}
               <div className="w-full h-3.5 bg-zinc-100 rounded-full overflow-hidden border border-zinc-200">
                 <div
                   className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-150 ease-out rounded-full"
@@ -528,7 +659,6 @@ export default function VideoUploaderWithProgress({
                 />
               </div>
 
-              {/* File Stats MB Loaded */}
               <div className="flex items-center justify-between text-[11px] text-zinc-500 font-medium">
                 <span className="truncate max-w-[220px] font-bold text-zinc-800">{fileStats?.name}</span>
                 <span className="font-mono text-zinc-700 font-bold bg-zinc-100 px-2 py-0.5 rounded-md">
@@ -543,6 +673,14 @@ export default function VideoUploaderWithProgress({
       {/* MODE 2: DIRECT VIDEO URL */}
       {inputMode === 'url' && (
         <div className="space-y-3 animate-fade-in">
+          {activeSourceMode === 'upload' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between gap-2 text-xs text-amber-900 font-semibold">
+              <span>
+                An <strong>Uploaded Video File</strong> {activeFileName ? `(${activeFileName})` : ''} is currently active. Clicking <strong>Apply URL</strong> below will switch from your uploaded file to the URL.
+              </span>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-bold text-zinc-700 mb-1.5">
               Paste Direct Video URL (.mp4, Pixabay, Streamable, or CDN link)
@@ -552,7 +690,7 @@ export default function VideoUploaderWithProgress({
                 type="text"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="https://cdn.pixabay.com/video/... or https://streamable.com/..."
+                placeholder="https://cdn.pixabay.com/video/... or direct .mp4 link"
                 className="flex-1 p-3 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900 outline-none focus:border-emerald-600 shadow-sm"
               />
               <button
@@ -570,7 +708,7 @@ export default function VideoUploaderWithProgress({
             <div className="space-y-1.5 pt-1">
               <span className="text-[11px] font-bold text-zinc-500 flex items-center gap-1">
                 <Sparkles className="w-3 h-3 text-emerald-600" />
-                Quick Scenic Malaysia Video Presets:
+                Quick Scenic Malaysia Video Presets (Click to Apply URL):
               </span>
               <div className="flex flex-wrap gap-2">
                 {presets.map((preset) => (
@@ -589,7 +727,7 @@ export default function VideoUploaderWithProgress({
         </div>
       )}
 
-      {/* MODE 3: SAVED VIDEOS LIBRARY (DELETE INDIVIDUAL VIDEOS) */}
+      {/* MODE 3: SAVED VIDEOS LIBRARY */}
       {inputMode === 'library' && (
         <div className="space-y-3 animate-fade-in">
           <div className="flex items-center justify-between">
@@ -613,7 +751,6 @@ export default function VideoUploaderWithProgress({
             )}
           </div>
 
-          {/* Inline Clear All Confirmation */}
           {showClearConfirm && (
             <div className="bg-rose-50 border border-rose-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-fade-in">
               <div className="flex items-center gap-2 text-rose-900 text-xs font-bold">
@@ -678,7 +815,7 @@ export default function VideoUploaderWithProgress({
                             {item.name}
                           </span>
                           {isActive && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-full shrink-0">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-md shrink-0">
                               Active
                             </span>
                           )}
@@ -691,7 +828,7 @@ export default function VideoUploaderWithProgress({
                           <span>{item.uploadedAt}</span>
                           <span>•</span>
                           <span className="uppercase text-[9px] font-bold text-zinc-400">
-                            {item.type}
+                            {item.type === 'file' ? 'UPLOADED FILE' : 'DIRECT URL'}
                           </span>
                         </div>
                       </div>
@@ -724,7 +861,7 @@ export default function VideoUploaderWithProgress({
                               type="button"
                               onClick={() => handleActivateVideo(item)}
                               className="px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
-                              title="Set as active background video"
+                              title="Set as active video"
                             >
                               <Play className="w-3 h-3 fill-current" />
                               <span>Use Video</span>
@@ -750,7 +887,7 @@ export default function VideoUploaderWithProgress({
         </div>
       )}
 
-      {/* MODE 4: STORAGE AUDIT & DEEP PURGE (CHECK IF PREVIOUS VIDEOS STILL EXIST) */}
+      {/* MODE 4: STORAGE AUDIT & DEEP PURGE */}
       {inputMode === 'storage_audit' && (
         <div className="space-y-3 animate-fade-in">
           <div className="flex items-center justify-between border-b border-zinc-200/80 pb-2.5">
@@ -760,7 +897,7 @@ export default function VideoUploaderWithProgress({
                 Storage Scanner &amp; Deep Purge
               </h5>
               <p className="text-[11px] text-zinc-500 mt-0.5">
-                Inspect all previous video files currently stored in your browser database and delete them in 1 click.
+                Inspect all previous video files currently stored and delete them in 1 click.
               </p>
             </div>
             <button
@@ -774,7 +911,6 @@ export default function VideoUploaderWithProgress({
             </button>
           </div>
 
-          {/* Audit Results Card */}
           <div className="bg-white border border-zinc-200 rounded-2xl p-4 space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-3">
@@ -791,9 +927,11 @@ export default function VideoUploaderWithProgress({
               </div>
               <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-3 col-span-2 sm:col-span-1">
                 <span className="block text-[10px] font-bold text-zinc-500 uppercase">Storage Status</span>
-                <span className={`text-xs font-black flex items-center gap-1 mt-0.5 ${
-                  auditData?.hasPreviousVideos ? 'text-amber-700' : 'text-emerald-700'
-                }`}>
+                <span
+                  className={`text-xs font-black flex items-center gap-1 mt-0.5 ${
+                    auditData?.hasPreviousVideos ? 'text-amber-700' : 'text-emerald-700'
+                  }`}
+                >
                   {auditData?.hasPreviousVideos ? (
                     <>
                       <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
@@ -809,7 +947,6 @@ export default function VideoUploaderWithProgress({
               </div>
             </div>
 
-            {/* Purge Action */}
             {auditData?.hasPreviousVideos ? (
               <div className="pt-2">
                 {!showPurgeConfirm ? (
@@ -873,17 +1010,18 @@ export default function VideoUploaderWithProgress({
         </div>
       )}
 
-      {/* Live Video Preview Box (LOCKED: No scrubber bar, no customer controls) */}
+      {/* Live Video Preview Box */}
       {activeUrl && (
         <div className="pt-2 border-t border-zinc-200/70">
           <div className="text-xs font-black text-zinc-800 mb-2 flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               <Play className="w-3.5 h-3.5 text-emerald-700 fill-current" />
-              Active Background Preview (Continuous Loop)
+              Live Unified Video Preview (Desktop Hero &amp; Mobile Player)
             </span>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-zinc-600 font-bold bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded-md flex items-center gap-1">
-                <Lock className="w-2.5 h-2.5 text-zinc-700" /> Locked Video
+                <Lock className="w-2.5 h-2.5 text-zinc-700" />
+                {activeSourceMode === 'upload' ? 'Uploaded File Active' : 'URL Stream Active'}
               </span>
               <span className="text-[10px] text-emerald-700 font-black uppercase bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
                 Active Live
@@ -892,13 +1030,7 @@ export default function VideoUploaderWithProgress({
           </div>
 
           <div className="relative w-full rounded-2xl overflow-hidden bg-black border border-zinc-800 shadow-inner aspect-video">
-            {activeUrl.startsWith('data:video') ||
-            activeUrl.startsWith('blob:') ||
-            activeUrl.endsWith('.mp4') ||
-            activeUrl.endsWith('.webm') ||
-            activeUrl.includes('.mp4') ||
-            activeUrl.includes('.webm') ||
-            activeUrl.includes('pixabay.com/video') ? (
+            {isDirectVideoSource(activeUrl) ? (
               <video
                 key={activeUrl}
                 src={activeUrl}
@@ -918,6 +1050,7 @@ export default function VideoUploaderWithProgress({
               />
             ) : (
               <iframe
+                key={activeUrl}
                 src={activeUrl}
                 className="w-full h-full border-0 block pointer-events-none select-none"
                 allow="autoplay; fullscreen"
@@ -925,7 +1058,6 @@ export default function VideoUploaderWithProgress({
                 title="Video Preview"
               />
             )}
-            {/* Transparent overlay protecting against touches/clicks */}
             <div className="absolute inset-0 pointer-events-none" />
           </div>
         </div>

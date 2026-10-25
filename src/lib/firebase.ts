@@ -3,6 +3,7 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChang
 import {
   initializeFirestore,
   getFirestore,
+  memoryLocalCache,
   setLogLevel as setFirestoreLogLevel
 } from 'firebase/firestore';
 import { setLogLevel } from 'firebase/app';
@@ -39,16 +40,22 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
 
-// Extract databaseId and initialize Firestore correctly with named database support
+// Extract databaseId and initialize Firestore with auto-detected long polling first
+// so writes and snapshots never hang behind proxy/iframe environments
 const databaseId = (firebaseConfig as any).firestoreDatabaseId;
 export const firestore = (() => {
   try {
-    return getFirestore(app, databaseId);
+    return initializeFirestore(
+      app,
+      {
+        localCache: memoryLocalCache(),
+        experimentalForceLongPolling: true,
+      },
+      databaseId
+    );
   } catch (_e) {
     try {
-      return initializeFirestore(app, {
-        experimentalAutoDetectLongPolling: true,
-      }, databaseId);
+      return getFirestore(app, databaseId);
     } catch (_e2) {
       return getFirestore(app);
     }

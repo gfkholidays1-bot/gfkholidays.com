@@ -1,24 +1,27 @@
-// IndexedDB-backed local storage & library manager for uploaded video files
-// Bypasses Firestore's 1MB document limit, allowing videos up to 500MB to play smoothly
+// IndexedDB-backed & Server-backed storage & library manager for uploaded video files
+// Ensures uploaded video files take strict priority over URLs when active, and persist across tabs & browsers
 
 const DB_NAME = 'gfk_video_storage_db';
 const DB_VERSION = 2;
 const STORE_NAME = 'videos';
 
+export const UNIFIED_VIDEO_STORAGE_KEY = 'hero_background_video';
+
 export const DEFAULT_SCENIC_HERO_VIDEO =
   'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
 export const DEFAULT_FEATURED_VIDEO =
-  'https://viddler.com/embed/player?id=20382&color=default';
+  'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
 
 export interface StoredVideoItem {
   id: string; // Unique identifier (e.g. vid_1730000000_abc)
-  storageKey: string; // hero_background_video or featured_attractions_video
+  storageKey: string; // hero_background_video
   name: string; // e.g. "malaysia_hero_drone.mp4"
   sizeBytes: number;
   sizeFormatted: string; // e.g. "18.4 MB"
   uploadedAt: string; // e.g. "24 Oct 2026, 4:45 PM"
   type: 'file' | 'url';
-  url?: string; // Direct link or cached blob object URL
+  url?: string; // Direct link, server URL (/api/cms-video/...), or cached blob object URL
+  serverUrl?: string; // Persistent server stream URL (/api/cms-video/hero_background_video?v=...)
   isActive: boolean;
 }
 
@@ -28,6 +31,50 @@ export interface StorageAuditResult {
   totalSizeFormatted: string;
   hasPreviousVideos: boolean;
   libraryCount: number;
+}
+
+/**
+ * Get or set the explicit video source priority ('upload' vs 'url').
+ * When 'upload' is active, external URLs are prevented from overriding the uploaded video file.
+ */
+export function getVideoSourceMode(): 'upload' | 'url' {
+  if (typeof window === 'undefined') return 'url';
+  try {
+    const mode = localStorage.getItem('gfk_video_source_mode');
+    if (mode === 'upload' || mode === 'url') return mode;
+    if (localStorage.getItem('gfk_video_cached_hero_background_video') === 'true') {
+      return 'upload';
+    }
+  } catch (_e) {}
+  return 'url';
+}
+
+export function setVideoSourceMode(mode: 'upload' | 'url', serverVideoUrl?: string, fileName?: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('gfk_video_source_mode', mode);
+    if (mode === 'upload') {
+      if (serverVideoUrl) {
+        localStorage.setItem('gfk_uploaded_server_video_url', serverVideoUrl);
+      }
+      if (fileName) {
+        localStorage.setItem('gfk_video_name_hero_background_video', fileName);
+      }
+    } else {
+      localStorage.removeItem('gfk_uploaded_server_video_url');
+      localStorage.removeItem('gfk_video_cached_hero_background_video');
+      localStorage.removeItem('gfk_video_cached_featured_attractions_video');
+    }
+  } catch (_e) {}
+}
+
+export function getUploadedServerVideoUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem('gfk_uploaded_server_video_url') || null;
+  } catch (_e) {
+    return null;
+  }
 }
 
 function openVideoDatabase(): Promise<IDBDatabase> {
@@ -58,14 +105,13 @@ function openVideoDatabase(): Promise<IDBDatabase> {
 const getLibraryStorageKey = (storageKey: string) => `gfk_video_lib_${storageKey}`;
 
 /**
- * Get all stored videos metadata list for a specific key
+ * Get all stored videos metadata list for a specific key (merges legacy featured_attractions_video if needed)
  */
-export function getStoredVideosList(storageKey: string): StoredVideoItem[] {
+export function getStoredVideosList(storageKey: string = UNIFIED_VIDEO_STORAGE_KEY): StoredVideoItem[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(getLibraryStorageKey(storageKey));
-    if (!raw) return [];
-    const list: StoredVideoItem[] = JSON.parse(raw);
+    const list: StoredVideoItem[] = raw ? JSON.parse(raw) : [];
     return Array.isArray(list) ? list : [];
   } catch (_e) {
     return [];
@@ -83,9 +129,39 @@ function saveStoredVideosList(storageKey: string, list: StoredVideoItem[]): void
 }
 
 /**
+ * Upload video binary to Express backend (/api/cms-video/hero_background_video) so it persists across browsers & tabs
+ */
+export async function uploadVideoToServer(
+  storageKey: string,
+  blob: Blob,
+  fileName: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/cms-video/${encodeURIComponent(storageKey)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': blob.type || 'video/mp4',
+        'X-Video-Type': blob.type || 'video/mp4',
+        'X-Video-Name': encodeURIComponent(fileName)
+      },
+      body: blob
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.videoUrl) {
+        return data.videoUrl as string;
+      }
+    }
+  } catch (err) {
+    console.warn('[videoStorage] Server video upload fallback to local IndexedDB:', err);
+  }
+  return null;
+}
+
+/**
  * Scan all stored videos in IndexedDB & localStorage to check if previous videos exist
  */
-export async function auditStoredVideos(storageKey: string): Promise<StorageAuditResult> {
+export async function auditStoredVideos(storageKey: string = UNIFIED_VIDEO_STORAGE_KEY): Promise<StorageAuditResult> {
   const result: StorageAuditResult = {
     indexedDbKeys: [],
     totalStoredCount: 0,
@@ -128,88 +204,118 @@ export async function auditStoredVideos(storageKey: string): Promise<StorageAudi
 }
 
 /**
- * Save a video Blob/File into IndexedDB under storageKey and create a library record
+ * Save a video Blob/File into IndexedDB AND upload to server, locking source mode to 'upload'
  */
 export async function saveVideoBlob(
   storageKey: string,
   blob: Blob,
   customName?: string
-): Promise<string> {
-  const db = await openVideoDatabase();
+): Promise<{ playbackUrl: string; serverUrl: string | null; fileName: string }> {
   const id = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const fileName = customName || (blob as any).name || `video-${new Date().toISOString().slice(0, 10)}.mp4`;
+  const fileName =
+    customName || (blob as any).name || `video-${new Date().toISOString().slice(0, 10)}.mp4`;
   const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
 
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
+  // 1. Upload to backend server so it gets a permanent HTTP streaming URL (/api/cms-video/hero_background_video?v=...)
+  const serverUrl = await uploadVideoToServer('hero_background_video', blob, fileName);
 
-    // Store under both the active storageKey (for immediate lookup) and unique id (for library persistence)
-    store.put(blob, storageKey);
-    store.put(blob, id);
+  // 2. Save in IndexedDB for instant 0ms local blob playback
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const db = await openVideoDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
 
-    tx.oncomplete = () => {
-      const objectUrl = URL.createObjectURL(blob);
-      try {
-        localStorage.setItem(`gfk_video_cached_${storageKey}`, 'true');
-        localStorage.setItem(`gfk_video_name_${storageKey}`, fileName);
-        localStorage.setItem(`gfk_video_active_id_${storageKey}`, id);
-        if (storageKey === 'hero_background_video') {
-          localStorage.setItem('gfk_hero_video_url', objectUrl);
-        }
-      } catch (_e) {}
+      // Store under unified keys and unique library ID
+      store.put(blob, 'hero_background_video');
+      store.put(blob, 'featured_attractions_video');
+      store.put(blob, storageKey);
+      store.put(blob, id);
 
-      // Update library list
-      const existing = getStoredVideosList(storageKey);
-      const updatedList: StoredVideoItem[] = existing.map((item) => ({
-        ...item,
-        isActive: false
-      }));
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e: any) => reject(e.target.error);
+    });
+  } catch (err) {
+    console.warn('[videoStorage] IndexedDB write warning:', err);
+  }
 
-      const newItem: StoredVideoItem = {
-        id,
-        storageKey,
-        name: fileName,
-        sizeBytes: blob.size,
-        sizeFormatted: `${sizeMb} MB`,
-        uploadedAt: new Date().toLocaleDateString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        }),
-        type: 'file',
-        url: objectUrl,
-        isActive: true
-      };
+  const effectivePersistentUrl = serverUrl || objectUrl;
 
-      updatedList.unshift(newItem);
-      saveStoredVideosList(storageKey, updatedList);
+  try {
+    localStorage.setItem('gfk_video_cached_hero_background_video', 'true');
+    localStorage.setItem('gfk_video_cached_featured_attractions_video', 'true');
+    localStorage.setItem(`gfk_video_cached_${storageKey}`, 'true');
+    localStorage.setItem(`gfk_video_name_${storageKey}`, fileName);
+    localStorage.setItem('gfk_video_name_hero_background_video', fileName);
+    localStorage.setItem(`gfk_video_active_id_${storageKey}`, id);
+    localStorage.setItem('gfk_hero_video_url', effectivePersistentUrl);
+    localStorage.setItem('gfk_featured_video_url', effectivePersistentUrl);
+  } catch (_e) {}
 
-      resolve(objectUrl);
-    };
+  // Lock source mode to 'upload' so external URLs cannot override the uploaded file
+  setVideoSourceMode('upload', serverUrl || undefined, fileName);
 
-    tx.onerror = (e: any) => {
-      reject(e.target.error);
-    };
-  });
+  // Update library list
+  const existing = getStoredVideosList(storageKey);
+  const updatedList: StoredVideoItem[] = existing.map((item) => ({
+    ...item,
+    isActive: false
+  }));
+
+  const newItem: StoredVideoItem = {
+    id,
+    storageKey,
+    name: fileName,
+    sizeBytes: blob.size,
+    sizeFormatted: `${sizeMb} MB`,
+    uploadedAt: new Date().toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }),
+    type: 'file',
+    url: serverUrl || objectUrl,
+    serverUrl: serverUrl || undefined,
+    isActive: true
+  };
+
+  updatedList.unshift(newItem);
+  saveStoredVideosList(storageKey, updatedList);
+
+  return {
+    playbackUrl: serverUrl || objectUrl,
+    serverUrl,
+    fileName
+  };
 }
 
 /**
- * Register a URL in the stored video library
+ * Register a URL in the stored video library and switch priority mode to 'url'
  */
-export function registerUrlInLibrary(
+export async function registerUrlInLibrary(
   storageKey: string,
   url: string,
   customLabel?: string
-): void {
+): Promise<void> {
+  // Explicitly switch mode to 'url' and remove active blob overrides so uploaded video no longer blocks URL
+  setVideoSourceMode('url');
+  await deleteVideoBlob('hero_background_video');
+  await deleteVideoBlob('featured_attractions_video');
+
+  try {
+    localStorage.setItem('gfk_hero_video_url', url);
+    localStorage.setItem('gfk_featured_video_url', url);
+  } catch (_e) {}
+
   const existing = getStoredVideosList(storageKey);
   const updatedList: StoredVideoItem[] = existing.map((item) => ({
     ...item,
     isActive: item.url === url
   }));
 
-  const already = updatedList.find((i) => i.url === url);
+  const already = updatedList.find((i) => i.url === url && i.type === 'url');
   if (already) {
     already.isActive = true;
   } else {
@@ -245,9 +351,19 @@ export function registerUrlInLibrary(
 }
 
 /**
- * Retrieve a stored video Blob from IndexedDB and return an active Object URL
+ * Retrieve a stored video Blob from IndexedDB ONLY if source mode is 'upload'
  */
-export async function loadVideoBlob(key: string): Promise<string | null> {
+export async function loadVideoBlob(key: string = UNIFIED_VIDEO_STORAGE_KEY): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+
+  // If the admin explicitly switched to URL mode, do not return stale IndexedDB blobs
+  if (getVideoSourceMode() === 'url') {
+    return null;
+  }
+
+  // First check if we have a server-streamed URL for the uploaded video
+  const serverUrl = getUploadedServerVideoUrl();
+
   try {
     const db = await openVideoDatabase();
     return new Promise((resolve) => {
@@ -260,16 +376,16 @@ export async function loadVideoBlob(key: string): Promise<string | null> {
         if (blob instanceof Blob) {
           resolve(URL.createObjectURL(blob));
         } else {
-          resolve(null);
+          resolve(serverUrl);
         }
       };
 
       request.onerror = () => {
-        resolve(null);
+        resolve(serverUrl);
       };
     });
   } catch (_e) {
-    return null;
+    return serverUrl;
   }
 }
 
@@ -278,58 +394,79 @@ export async function loadVideoBlob(key: string): Promise<string | null> {
  */
 export async function activateStoredVideo(
   item: StoredVideoItem,
-  storageKey: string
-): Promise<string | null> {
+  storageKey: string = UNIFIED_VIDEO_STORAGE_KEY
+): Promise<{ activeUrl: string; sourceMode: 'upload' | 'url'; fileName: string } | null> {
   if (item.type === 'url' && item.url) {
-    // URL video
-    await deleteVideoBlob(storageKey); // clear active blob override
+    setVideoSourceMode('url');
+    await deleteVideoBlob('hero_background_video');
+    await deleteVideoBlob('featured_attractions_video');
+    try {
+      localStorage.setItem('gfk_hero_video_url', item.url);
+      localStorage.setItem('gfk_featured_video_url', item.url);
+    } catch (_e) {}
     const list = getStoredVideosList(storageKey).map((v) => ({
       ...v,
       isActive: v.id === item.id
     }));
     saveStoredVideosList(storageKey, list);
-    return item.url;
+    return { activeUrl: item.url, sourceMode: 'url', fileName: item.name };
   }
 
   // File in IndexedDB
   try {
     const db = await openVideoDatabase();
-    return new Promise((resolve) => {
+    const blob: Blob | null = await new Promise((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       const getReq = store.get(item.id);
 
       getReq.onsuccess = (event: any) => {
-        const blob = event.target.result;
-        if (blob instanceof Blob) {
-          store.put(blob, storageKey);
-          const objUrl = URL.createObjectURL(blob);
-
-          try {
-            localStorage.setItem(`gfk_video_cached_${storageKey}`, 'true');
-            localStorage.setItem(`gfk_video_name_${storageKey}`, item.name);
-            localStorage.setItem(`gfk_video_active_id_${storageKey}`, item.id);
-            if (storageKey === 'hero_background_video') {
-              localStorage.setItem('gfk_hero_video_url', objUrl);
-            }
-          } catch (_e) {}
-
-          const list = getStoredVideosList(storageKey).map((v) => ({
-            ...v,
-            isActive: v.id === item.id
-          }));
-          saveStoredVideosList(storageKey, list);
-
-          resolve(objUrl);
+        const b = event.target.result;
+        if (b instanceof Blob) {
+          store.put(b, 'hero_background_video');
+          store.put(b, 'featured_attractions_video');
+          store.put(b, storageKey);
+          resolve(b);
         } else {
           resolve(null);
         }
       };
 
-      getReq.onerror = () => {
-        resolve(null);
-      };
+      getReq.onerror = () => resolve(null);
     });
+
+    if (blob) {
+      const serverUrl = await uploadVideoToServer('hero_background_video', blob, item.name);
+      const objUrl = URL.createObjectURL(blob);
+      const finalUrl = serverUrl || objUrl;
+
+      setVideoSourceMode('upload', serverUrl || undefined, item.name);
+      try {
+        localStorage.setItem(`gfk_video_cached_${storageKey}`, 'true');
+        localStorage.setItem('gfk_video_cached_hero_background_video', 'true');
+        localStorage.setItem(`gfk_video_name_${storageKey}`, item.name);
+        localStorage.setItem(`gfk_video_active_id_${storageKey}`, item.id);
+        localStorage.setItem('gfk_hero_video_url', finalUrl);
+        localStorage.setItem('gfk_featured_video_url', finalUrl);
+      } catch (_e) {}
+
+      const list = getStoredVideosList(storageKey).map((v) => ({
+        ...v,
+        isActive: v.id === item.id
+      }));
+      saveStoredVideosList(storageKey, list);
+
+      return { activeUrl: finalUrl, sourceMode: 'upload', fileName: item.name };
+    } else if (item.serverUrl) {
+      setVideoSourceMode('upload', item.serverUrl, item.name);
+      const list = getStoredVideosList(storageKey).map((v) => ({
+        ...v,
+        isActive: v.id === item.id
+      }));
+      saveStoredVideosList(storageKey, list);
+      return { activeUrl: item.serverUrl, sourceMode: 'upload', fileName: item.name };
+    }
+    return null;
   } catch {
     return null;
   }
@@ -337,24 +474,21 @@ export async function activateStoredVideo(
 
 /**
  * Delete a specific stored video item from library and IndexedDB
- * Returns boolean indicating if the deleted video was the active one
  */
 export async function deleteStoredVideoItem(
   id: string,
-  storageKey: string
+  storageKey: string = UNIFIED_VIDEO_STORAGE_KEY
 ): Promise<{ wasActive: boolean }> {
   const currentList = getStoredVideosList(storageKey);
   const target = currentList.find((v) => v.id === id);
   const wasActive = Boolean(target?.isActive);
 
-  // Revoke object URL if exists
   if (target?.url && target.url.startsWith('blob:')) {
     try {
       URL.revokeObjectURL(target.url);
     } catch (_e) {}
   }
 
-  // Delete from IndexedDB if it was a file
   try {
     const db = await openVideoDatabase();
     await new Promise<void>((resolve) => {
@@ -363,6 +497,8 @@ export async function deleteStoredVideoItem(
       store.delete(id);
       if (wasActive) {
         store.delete(storageKey);
+        store.delete('hero_background_video');
+        store.delete('featured_attractions_video');
       }
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
@@ -370,19 +506,21 @@ export async function deleteStoredVideoItem(
   } catch (_e) {}
 
   if (wasActive) {
+    setVideoSourceMode('url');
+    try {
+      await fetch('/api/cms-video/hero_background_video', { method: 'DELETE' });
+    } catch (_e) {}
     try {
       localStorage.removeItem(`gfk_video_cached_${storageKey}`);
+      localStorage.removeItem('gfk_video_cached_hero_background_video');
+      localStorage.removeItem('gfk_video_cached_featured_attractions_video');
       localStorage.removeItem(`gfk_video_name_${storageKey}`);
       localStorage.removeItem(`gfk_video_active_id_${storageKey}`);
-      if (storageKey === 'hero_background_video') {
-        localStorage.removeItem('gfk_hero_video_url');
-      } else if (storageKey === 'featured_attractions_video') {
-        localStorage.removeItem('gfk_featured_video_url');
-      }
+      localStorage.removeItem('gfk_hero_video_url');
+      localStorage.removeItem('gfk_featured_video_url');
     } catch (_e) {}
   }
 
-  // Update library list
   const nextList = currentList.filter((v) => v.id !== id);
   saveStoredVideosList(storageKey, nextList);
 
@@ -390,7 +528,7 @@ export async function deleteStoredVideoItem(
 }
 
 /**
- * Delete a stored video from IndexedDB (legacy fallback)
+ * Delete a stored video from IndexedDB
  */
 export async function deleteVideoBlob(key: string): Promise<void> {
   try {
@@ -412,7 +550,7 @@ export async function deleteVideoBlob(key: string): Promise<void> {
 /**
  * Clear all stored videos for a specific key
  */
-export async function clearAllStoredVideos(storageKey: string): Promise<void> {
+export async function clearAllStoredVideos(storageKey: string = UNIFIED_VIDEO_STORAGE_KEY): Promise<void> {
   const list = getStoredVideosList(storageKey);
   for (const item of list) {
     if (item.url && item.url.startsWith('blob:')) {
@@ -428,6 +566,8 @@ export async function clearAllStoredVideos(storageKey: string): Promise<void> {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       store.delete(storageKey);
+      store.delete('hero_background_video');
+      store.delete('featured_attractions_video');
       for (const item of list) {
         if (item.type === 'file') {
           store.delete(item.id);
@@ -439,27 +579,35 @@ export async function clearAllStoredVideos(storageKey: string): Promise<void> {
   } catch (_e) {}
 
   try {
+    await fetch('/api/cms-video/hero_background_video', { method: 'DELETE' });
+  } catch (_e) {}
+
+  setVideoSourceMode('url');
+
+  try {
     localStorage.removeItem(getLibraryStorageKey(storageKey));
     localStorage.removeItem(`gfk_video_cached_${storageKey}`);
+    localStorage.removeItem('gfk_video_cached_hero_background_video');
+    localStorage.removeItem('gfk_video_cached_featured_attractions_video');
     localStorage.removeItem(`gfk_video_name_${storageKey}`);
     localStorage.removeItem(`gfk_video_active_id_${storageKey}`);
-    if (storageKey === 'hero_background_video') {
-      localStorage.removeItem('gfk_hero_video_url');
-    } else if (storageKey === 'featured_attractions_video') {
-      localStorage.removeItem('gfk_featured_video_url');
-    }
+    localStorage.removeItem('gfk_hero_video_url');
+    localStorage.removeItem('gfk_featured_video_url');
   } catch (_e) {}
 }
 
 /**
- * Master Purge: Eradicate ALL previous uploaded video files from both IndexedDB and localStorage
+ * Master Purge: Eradicate ALL previous uploaded video files from IndexedDB, Server, and localStorage
  */
 export async function purgeAllVideoStorage(): Promise<{ purgedCount: number }> {
   let purgedCount = 0;
 
   if (typeof window === 'undefined') return { purgedCount: 0 };
 
-  // 1. Clear IndexedDB store
+  try {
+    await fetch('/api/cms-video/hero_background_video', { method: 'DELETE' });
+  } catch (_e) {}
+
   try {
     const db = await openVideoDatabase();
     await new Promise<void>((resolve) => {
@@ -475,7 +623,6 @@ export async function purgeAllVideoStorage(): Promise<{ purgedCount: number }> {
     db.close();
   } catch (_e) {}
 
-  // 2. Clear all video-related localStorage keys
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
@@ -484,6 +631,7 @@ export async function purgeAllVideoStorage(): Promise<{ purgedCount: number }> {
       (k.startsWith('gfk_video_') ||
         k.startsWith('gfk_hero_video') ||
         k.startsWith('gfk_featured_video') ||
+        k.startsWith('gfk_uploaded_server_video') ||
         k.includes('custom_hero_video') ||
         k.includes('cms_hero_video'))
     ) {
@@ -495,5 +643,24 @@ export async function purgeAllVideoStorage(): Promise<{ purgedCount: number }> {
     purgedCount++;
   });
 
+  setVideoSourceMode('url');
+
   return { purgedCount };
+}
+
+/**
+ * Helper to determine if a URL is a direct video file/stream (vs an iframe embed)
+ */
+export function isDirectVideoSource(src?: string): boolean {
+  if (!src) return false;
+  return (
+    src.startsWith('blob:') ||
+    src.startsWith('data:video') ||
+    src.startsWith('/api/cms-video/') ||
+    src.includes('/api/cms-video/') ||
+    src.includes('.mp4') ||
+    src.includes('.webm') ||
+    src.includes('.mov') ||
+    src.includes('pixabay.com/video')
+  );
 }

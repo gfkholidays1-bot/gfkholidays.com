@@ -383,6 +383,8 @@ export default function App() {
         onRequestLogin={setAuthModalRole}
         logoUrl={globalSettings.logoUrl}
         showBrandText={globalSettings.showBrandText}
+        logoHeight={globalSettings.logoHeight}
+        logoAlign={globalSettings.logoAlign as 'left' | 'center'}
       />
 
       <AuthModal

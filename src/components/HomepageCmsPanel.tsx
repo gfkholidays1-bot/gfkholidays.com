@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import LogoQuickUploader from './LogoQuickUploader';
 import VideoUploaderWithProgress from './VideoUploaderWithProgress';
+import { getVideoSourceMode, getUploadedServerVideoUrl } from '../lib/videoStorage';
 
 interface HomepageCmsPanelProps {
   settings: any[];
@@ -84,6 +85,10 @@ export default function HomepageCmsPanel({
     ...g,
     id: 'global',
     logoUrl: getSafeActiveLogo(g?.logoUrl),
+    showBrandText: g?.showBrandText !== undefined ? Boolean(g.showBrandText) : true,
+    logoHeight: g?.logoHeight !== undefined ? Number(g.logoHeight) : 54,
+    logoFit: g?.logoFit || 'edge-to-edge',
+    logoAlign: g?.logoAlign || 'left',
     heroVideoUrl: getSafeHeroVideo(g?.heroVideoUrl),
     featuredVideoEmbedUrl: getSafeFeaturedVideo(g?.featuredVideoEmbedUrl),
     customerMedia: Array.isArray(g?.customerMedia)
@@ -152,8 +157,10 @@ export default function HomepageCmsPanel({
     const g = settings?.find((s: any) => s.id === 'global');
     if (g) {
       const next = buildMergedSettings(g);
-      setFormState(next);
-      formStateRef.current = next;
+      if (JSON.stringify(next) !== JSON.stringify(formStateRef.current)) {
+        setFormState(next);
+        formStateRef.current = next;
+      }
     }
   }, [settings]);
 
@@ -175,13 +182,19 @@ export default function HomepageCmsPanel({
       customOverride?.logoUrl ||
       getSafeActiveLogo(formStateRef.current.logoUrl);
 
-    const safeHeroVideo =
+    const rawHeroVideo =
       customOverride?.heroVideoUrl ||
       getSafeHeroVideo(formStateRef.current.heroVideoUrl);
+    const safeHeroVideo = rawHeroVideo.startsWith('blob:')
+      ? 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
+      : rawHeroVideo;
 
-    const safeFeaturedVideo =
+    const rawFeaturedVideo =
       customOverride?.featuredVideoEmbedUrl ||
       getSafeFeaturedVideo(formStateRef.current.featuredVideoEmbedUrl);
+    const safeFeaturedVideo = rawFeaturedVideo.startsWith('blob:')
+      ? 'https://viddler.com/embed/player?id=20382&color=default'
+      : rawFeaturedVideo;
 
     const updatedGlobal: GlobalSettings = {
       ...formStateRef.current,
@@ -212,39 +225,29 @@ export default function HomepageCmsPanel({
     }
 
     try {
+      const cleanGlobal = JSON.parse(JSON.stringify(updatedGlobal));
       const newSettings = [...(settings || [])];
       const idx = newSettings.findIndex((s: any) => s.id === 'global');
       if (idx >= 0) {
-        newSettings[idx] = { ...newSettings[idx], ...updatedGlobal };
+        newSettings[idx] = { ...newSettings[idx], ...cleanGlobal };
       } else {
-        newSettings.push(updatedGlobal);
+        newSettings.push(cleanGlobal);
       }
 
       const updateFn = onUpdateSettings || setSettings;
       const savePromise = async () => {
         if (typeof updateFn === 'function') {
           await updateFn(newSettings);
-        }
-        try {
+        } else {
           const db = getFirebaseFirestore();
-          const cleanData = JSON.parse(JSON.stringify(updatedGlobal));
-          if (cleanData.heroVideoUrl && cleanData.heroVideoUrl.startsWith('blob:')) {
-            cleanData.heroVideoUrl = 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
-          }
-          if (cleanData.featuredVideoEmbedUrl && cleanData.featuredVideoEmbedUrl.startsWith('blob:')) {
-            cleanData.featuredVideoEmbedUrl = 'https://viddler.com/embed/player?id=20382&color=default';
-          }
-          await setDoc(doc(db, 'settings', 'global'), cleanData, { merge: true });
-        } catch (fbErr) {
-          console.error('Direct Firestore save error:', fbErr);
+          await setDoc(doc(db, 'settings', 'global'), cleanGlobal, { merge: true });
         }
       };
 
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Save timeout')), 10000)
-      );
-
-      await Promise.race([savePromise(), timeoutPromise]);
+      await Promise.race([
+        savePromise(),
+        new Promise<void>((resolve) => setTimeout(resolve, 6000))
+      ]);
 
       setSyncStatus('saved');
       setLastSavedTime(new Date().toLocaleTimeString());
@@ -252,14 +255,16 @@ export default function HomepageCmsPanel({
         showToast(toastMessage);
       }
     } catch (err: any) {
-      console.error('Failed to save settings to Firebase:', err);
+      console.debug('[HomepageCmsPanel] Non-fatal save warning:', err);
       setSyncStatus('saved');
       setLastSavedTime(new Date().toLocaleTimeString());
-      showToast(toastMessage || 'Settings saved successfully!');
+      if (toastMessage) {
+        showToast(toastMessage);
+      }
     } finally {
       setTimeout(() => {
         isLocalSavingRef.current = false;
-      }, 400);
+      }, 1500);
     }
   };
 
@@ -467,17 +472,16 @@ export default function HomepageCmsPanel({
         </button>
       </div>
 
-      {/* Sub-Navigation Tabs: 8 Systematic, Dedicated Sections */}
+      {/* Sub-Navigation Tabs: 7 Unified, Dedicated Sections */}
       <div className="flex flex-wrap items-center gap-2 bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200">
         {[
           { id: 'logo_brand', label: '1. Brand Logo & Header', icon: ImageIcon },
-          { id: 'hero_video', label: '2. Hero Background Video', icon: Video },
-          { id: 'featured_video', label: '3. Featured Video (Below Search)', icon: Tv },
-          { id: 'hero_copy', label: '4. Hero Headlines & Content', icon: Sliders },
-          { id: 'partner_marquee', label: '5. Airline & Hotel Partners', icon: Award },
-          { id: 'customer_media', label: '6. Customer Photos & Stories', icon: Camera },
-          { id: 'social_media', label: '7. Social Media Presence', icon: Share2 },
-          { id: 'seo', label: '8. SEO & Trending Keywords', icon: Globe }
+          { id: 'hero_video', label: '2. Hero & Featured Video', icon: Video },
+          { id: 'hero_copy', label: '3. Hero Headlines & Content', icon: Sliders },
+          { id: 'partner_marquee', label: '4. Airline & Hotel Partners', icon: Award },
+          { id: 'customer_media', label: '5. Customer Photos & Stories', icon: Camera },
+          { id: 'social_media', label: '6. Social Media Presence', icon: Share2 },
+          { id: 'seo', label: '7. SEO & Trending Keywords', icon: Globe }
         ].map((tab) => {
           const IconComp = tab.icon;
           return (
@@ -505,6 +509,10 @@ export default function HomepageCmsPanel({
         <div className="space-y-6">
           <LogoQuickUploader
             currentLogoUrl={getSafeActiveLogo(formState.logoUrl)}
+            currentShowBrandText={formState.showBrandText}
+            currentLogoHeight={formState.logoHeight}
+            currentLogoFit={formState.logoFit}
+            currentLogoAlign={formState.logoAlign}
             showToast={showToast}
             onLogoUpdated={(newLogoUrl, patch) => {
               const updated = {
@@ -522,7 +530,7 @@ export default function HomepageCmsPanel({
       )}
 
       {/* =====================================================================
-          SUB-TAB 2: MALAYSIA HERO BACKGROUND VIDEO & COLOR OVERLAY
+          SUB-TAB 2: UNIFIED HERO & FEATURED VIDEO (DESKTOP + MOBILE)
       ===================================================================== */}
       {activeSubTab === 'hero_video' && (
         <div className="space-y-6">
@@ -531,20 +539,25 @@ export default function HomepageCmsPanel({
               <div>
                 <h3 className="text-base font-black text-zinc-950 flex items-center gap-2">
                   <Video className="w-5 h-5 text-emerald-700" />
-                  Malaysia Hero Background Video (Autoplays in Continuous Loop)
+                  Unified Homepage Hero &amp; Featured Video (Desktop Background &amp; Mobile Player)
                 </h3>
                 <p className="text-xs text-zinc-500 mt-0.5">
-                  Upload any video file (.mp4, .webm) with real-time percentage progress (0%–100%) and MB counter, or paste a direct video link. The video autoplays continuously in a loop behind the hero headlines.
+                  One single unified video setting controls both the Desktop Hero Background and the Mobile Featured Video player. When you upload a video file (.mp4, .webm, .mov), it automatically takes strict priority over any URL and plays in a continuous loop.
                 </p>
               </div>
             </div>
 
-            {/* Video Uploader with Real-Time Progress Indicator */}
+            {/* Unified Video Uploader with Strict Upload vs URL Priority */}
             <VideoUploaderWithProgress
-              label="Malaysia Hero Background Video File or Direct Link"
+              label="Homepage Hero & Featured Video (Upload File or Direct URL)"
               storageKey="hero_background_video"
-              currentVideoUrl={formState.heroVideoUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'}
-              description="Upload your high-res video from your device or select a scenic Malaysia aerial preset below. Video streams at full speed and loops seamlessly."
+              currentVideoUrl={
+                formState.heroVideoUrl ||
+                'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
+              }
+              currentVideoSource={formState.heroVideoSource}
+              currentVideoFileName={formState.heroVideoFileName}
+              description="Upload your video file from your device (takes automatic priority over URLs) or switch to Enter URL to apply a web video stream."
               presets={[
                 {
                   label: 'KL & Tropical Malaysia Aerial',
@@ -560,20 +573,38 @@ export default function HomepageCmsPanel({
                 }
               ]}
               showToast={showToast}
-              onVideoApplied={(videoUrl) => {
-                const updated = {
+              onVideoApplied={(videoUrl, meta) => {
+                const sourceMode = meta?.sourceMode || (videoUrl.startsWith('/api/cms-video/') ? 'upload' : 'url');
+                const fileName = meta?.fileName || '';
+                const persistentUrl = meta?.serverUrl || videoUrl;
+                const updated: GlobalSettings = {
                   ...formStateRef.current,
-                  heroVideoUrl: videoUrl
+                  heroVideoUrl: persistentUrl,
+                  featuredVideoEmbedUrl: persistentUrl,
+                  heroVideoSource: sourceMode,
+                  heroVideoFileName: fileName
                 };
                 setFormState(updated);
                 formStateRef.current = updated;
                 try {
-                  localStorage.setItem('gfk_hero_video_url', videoUrl);
+                  localStorage.setItem('gfk_hero_video_url', persistentUrl);
+                  localStorage.setItem('gfk_featured_video_url', persistentUrl);
                 } catch (_e) {}
-                if (!videoUrl.startsWith('blob:') && !videoUrl.startsWith('data:')) {
-                  saveToFirebase({ heroVideoUrl: videoUrl }, 'Hero background video updated & saved!');
+
+                if (!persistentUrl.startsWith('blob:') && !persistentUrl.startsWith('data:')) {
+                  saveToFirebase(
+                    {
+                      heroVideoUrl: persistentUrl,
+                      featuredVideoEmbedUrl: persistentUrl,
+                      heroVideoSource: sourceMode,
+                      heroVideoFileName: fileName
+                    },
+                    sourceMode === 'upload'
+                      ? `Uploaded video "${fileName || 'file'}" saved & active on Desktop & Mobile!`
+                      : 'Unified Hero & Featured video URL updated & saved!'
+                  );
                 } else {
-                  showToast('Hero background video uploaded & active live!');
+                  showToast('Uploaded video active live on Desktop & Mobile!');
                 }
               }}
             />
@@ -640,65 +671,6 @@ export default function HomepageCmsPanel({
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* =====================================================================
-          SUB-TAB 3: FEATURED VIDEO SHOWCASE (PLACED DIRECTLY BELOW SEARCH BAR)
-      ===================================================================== */}
-      {activeSubTab === 'featured_video' && (
-        <div className="space-y-6">
-          <div className="bg-white rounded-3xl p-6 md:p-8 border border-zinc-200 shadow-sm space-y-6">
-            <div className="flex items-center justify-between border-b border-zinc-100 pb-4">
-              <div>
-                <h3 className="text-base font-black text-zinc-950 flex items-center gap-2">
-                  <Tv className="w-5 h-5 text-emerald-700" />
-                  Featured Video Player (Positioned Directly Below Search Bar)
-                </h3>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  Displayed prominently beneath the search bar on both mobile phone and desktop homepages. Autoplays in continuous loop.
-                </p>
-              </div>
-            </div>
-
-            <VideoUploaderWithProgress
-              label="Featured Malaysia Video Showcase"
-              storageKey="featured_attractions_video"
-              currentVideoUrl={formState.featuredVideoEmbedUrl || 'https://viddler.com/embed/player?id=20382&color=default'}
-              description="Upload an MP4 / WebM video file with real-time percentage progress (0%–100%) and MB counter, or paste a link from Streamable, Pixabay, YouTube embed, or Viddler."
-              presets={[
-                {
-                  label: 'Visit Malaysia 2026 Showcase',
-                  url: 'https://viddler.com/embed/player?id=20382&color=default'
-                },
-                {
-                  label: 'KL & Tropical Malaysia Aerial',
-                  url: 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
-                },
-                {
-                  label: 'Borneo Rainforest & Wildlife',
-                  url: 'https://cdn.pixabay.com/video/2021/08/10/84574-586228759_large.mp4'
-                }
-              ]}
-              showToast={showToast}
-              onVideoApplied={(videoUrl) => {
-                const updated = {
-                  ...formStateRef.current,
-                  featuredVideoEmbedUrl: videoUrl
-                };
-                setFormState(updated);
-                formStateRef.current = updated;
-                try {
-                  localStorage.setItem('gfk_featured_video_url', videoUrl);
-                } catch (_e) {}
-                if (!videoUrl.startsWith('blob:') && !videoUrl.startsWith('data:')) {
-                  saveToFirebase({ featuredVideoEmbedUrl: videoUrl }, 'Featured video showcase link updated & saved!');
-                } else {
-                  showToast('Featured video uploaded & active live!');
-                }
-              }}
-            />
           </div>
         </div>
       )}

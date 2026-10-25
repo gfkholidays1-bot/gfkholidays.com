@@ -6,6 +6,8 @@ interface HeaderProps {
   onRequestLogin?: (role: 'customer' | 'agent') => void;
   logoUrl?: string;
   showBrandText?: boolean;
+  logoHeight?: number;
+  logoAlign?: 'left' | 'center';
   userRole: 'guest' | 'customer' | 'agent' | 'admin';
   currentUser: Agent | null;
   onNavigate: (path: string, params?: any) => void;
@@ -19,6 +21,8 @@ export default function Header({
   onLoginAs,
   logoUrl,
   showBrandText = true,
+  logoHeight = 54,
+  logoAlign = 'left',
   onRequestLogin
 }: HeaderProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -30,7 +34,8 @@ export default function Header({
 
   const [logoSettings, setLogoSettings] = useState(() => ({
     url: logoUrl || '/logo-transparent.svg',
-    height: 54,
+    height: logoHeight || 54,
+    align: logoAlign || 'left',
     showBrandText: showBrandText !== undefined ? showBrandText : true
   }));
 
@@ -42,24 +47,45 @@ export default function Header({
 
   useEffect(() => {
     if (showBrandText !== undefined) {
-      setLogoSettings(prev => ({ ...prev, showBrandText }));
+      setLogoSettings(prev => ({ ...prev, showBrandText: Boolean(showBrandText) }));
     }
   }, [showBrandText]);
+
+  useEffect(() => {
+    if (logoHeight !== undefined) {
+      setLogoSettings(prev => ({ ...prev, height: Number(logoHeight) || 54 }));
+    }
+  }, [logoHeight]);
+
+  useEffect(() => {
+    if (logoAlign) {
+      setLogoSettings(prev => ({ ...prev, align: logoAlign }));
+    }
+  }, [logoAlign]);
 
   useEffect(() => {
     const handleLogoUpdate = (e: any) => {
       if (e.detail) {
         const rawNew = typeof e.detail === 'string' ? e.detail : e.detail?.logoUrl;
         if (rawNew === '/android-chrome-512x512.png' || rawNew === 'https://iili.io/ChVw1zF.png') {
-          return; // Ignore fallback placeholder events
+          return;
         }
         if (typeof e.detail === 'string') {
           setLogoSettings(prev => ({ ...prev, url: e.detail }));
         } else if (typeof e.detail === 'object') {
           setLogoSettings(prev => ({
             url: e.detail.logoUrl || prev.url,
-            height: e.detail.height !== undefined ? Number(e.detail.height) : prev.height,
-            showBrandText: e.detail.showBrandText !== undefined ? Boolean(e.detail.showBrandText) : prev.showBrandText
+            height:
+              e.detail.logoHeight !== undefined
+                ? Number(e.detail.logoHeight)
+                : e.detail.height !== undefined
+                ? Number(e.detail.height)
+                : prev.height,
+            align: e.detail.logoAlign || e.detail.alignment || prev.align,
+            showBrandText:
+              e.detail.showBrandText !== undefined
+                ? Boolean(e.detail.showBrandText)
+                : prev.showBrandText
           }));
         }
       }

@@ -6,12 +6,20 @@ import { GlobalSettings } from '../types';
 
 interface LogoQuickUploaderProps {
   currentLogoUrl: string;
+  currentShowBrandText?: boolean;
+  currentLogoHeight?: number;
+  currentLogoFit?: 'edge-to-edge' | 'standard' | 'compact';
+  currentLogoAlign?: 'left' | 'center';
   onLogoUpdated: (newLogoUrl: string, settingsPatch?: Partial<GlobalSettings>) => void;
   showToast: (msg: string) => void;
 }
 
 export default function LogoQuickUploader({
   currentLogoUrl,
+  currentShowBrandText,
+  currentLogoHeight,
+  currentLogoFit,
+  currentLogoAlign,
   onLogoUpdated,
   showToast
 }: LogoQuickUploaderProps) {
@@ -21,6 +29,7 @@ export default function LogoQuickUploader({
   });
 
   const [fitMode, setFitMode] = useState<'edge-to-edge' | 'standard' | 'compact'>(() => {
+    if (currentLogoFit) return currentLogoFit;
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('gfk_logo_fit') as any) || 'edge-to-edge';
     }
@@ -28,6 +37,7 @@ export default function LogoQuickUploader({
   });
 
   const [alignment, setAlignment] = useState<'left' | 'center'>(() => {
+    if (currentLogoAlign) return currentLogoAlign;
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('gfk_logo_align') as any) || 'left';
     }
@@ -35,14 +45,18 @@ export default function LogoQuickUploader({
   });
 
   const [logoHeight, setLogoHeight] = useState<number>(() => {
+    if (currentLogoHeight && currentLogoHeight >= 32 && currentLogoHeight <= 80) {
+      return currentLogoHeight;
+    }
     if (typeof window !== 'undefined') {
       const h = Number(localStorage.getItem('gfk_logo_height'));
       if (h >= 32 && h <= 80) return h;
     }
-    return 54; // Default prominent edge-to-edge height in px
+    return 54;
   });
 
   const [showBrandText, setShowBrandText] = useState<boolean>(() => {
+    if (currentShowBrandText !== undefined) return Boolean(currentShowBrandText);
     if (typeof window !== 'undefined') {
       const val = localStorage.getItem('gfk_show_brand_text');
       if (val !== null) return val === 'true';
@@ -52,17 +66,38 @@ export default function LogoQuickUploader({
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const sliderDebounceRef = useRef<any>(null);
 
-  // Sync with prop if it's a real custom URL
+  // Sync with parent props when loaded
   useEffect(() => {
-    if (
-      currentLogoUrl &&
-      currentLogoUrl !== 'https://iili.io/ChVw1zF.png' &&
-      currentLogoUrl !== '/logo-transparent.svg'
-    ) {
+    if (currentLogoUrl && currentLogoUrl !== 'https://iili.io/ChVw1zF.png') {
       setActiveLogo(currentLogoUrl);
     }
   }, [currentLogoUrl]);
+
+  useEffect(() => {
+    if (currentShowBrandText !== undefined) {
+      setShowBrandText(Boolean(currentShowBrandText));
+    }
+  }, [currentShowBrandText]);
+
+  useEffect(() => {
+    if (currentLogoHeight && currentLogoHeight >= 32 && currentLogoHeight <= 80) {
+      setLogoHeight(Number(currentLogoHeight));
+    }
+  }, [currentLogoHeight]);
+
+  useEffect(() => {
+    if (currentLogoAlign) {
+      setAlignment(currentLogoAlign);
+    }
+  }, [currentLogoAlign]);
+
+  useEffect(() => {
+    if (currentLogoFit) {
+      setFitMode(currentLogoFit);
+    }
+  }, [currentLogoFit]);
 
   // Trims empty transparent and white margins from an image to make it 100% edge-to-edge
   const autoCropEdgeToEdge = (imageSrc: string): Promise<string> => {
@@ -191,7 +226,7 @@ export default function LogoQuickUploader({
     saveAndPublish(cropped, fitMode, alignment, logoHeight, showBrandText);
   };
 
-  // Save to localStorage, dispatch live event, and save to Firebase
+  // Save to localStorage, dispatch live event, and propagate through parent CMS panel
   const saveAndPublish = async (
     targetLogo = activeLogo,
     targetFit = fitMode,
@@ -208,42 +243,31 @@ export default function LogoQuickUploader({
       localStorage.setItem('gfk_logo_height', String(targetHeight));
       localStorage.setItem('gfk_show_brand_text', String(targetShowText));
 
+      const patch: Partial<GlobalSettings> = {
+        logoUrl: targetLogo,
+        invoiceLogoUrl: targetLogo,
+        logoFit: targetFit,
+        logoAlign: targetAlign,
+        logoHeight: targetHeight,
+        showBrandText: targetShowText
+      };
+
       // 2. Dispatch custom event so Header, Footer, and live app update instantly
       window.dispatchEvent(
         new CustomEvent('gfk-logo-updated', {
           detail: {
-            logoUrl: targetLogo,
+            ...patch,
             fit: targetFit,
             alignment: targetAlign,
-            height: targetHeight,
-            showBrandText: targetShowText
+            height: targetHeight
           }
         })
       );
 
-      // 3. Save to Firebase Firestore
-      const db = getFirebaseFirestore();
-      await setDoc(
-        doc(db, 'settings', 'global'),
-        {
-          logoUrl: targetLogo,
-          invoiceLogoUrl: targetLogo,
-          logoFit: targetFit,
-          logoAlign: targetAlign,
-          logoHeight: targetHeight,
-          showBrandText: targetShowText
-        },
-        { merge: true }
-      );
-
-      onLogoUpdated(targetLogo, {
-        logoUrl: targetLogo,
-        invoiceLogoUrl: targetLogo
-      });
-
-      showToast('Logo saved and applied live to website!');
+      // 3. Immediately update parent state & persist via CMS/Firestore pipeline
+      onLogoUpdated(targetLogo, patch);
     } catch (err: any) {
-      console.error('Error saving logo:', err);
+      console.debug('Warning saving logo:', err);
     } finally {
       setTimeout(() => setIsSaved(false), 2000);
     }
@@ -266,33 +290,27 @@ export default function LogoQuickUploader({
       localStorage.setItem('gfk_show_brand_text', 'true');
     } catch (_e) {}
 
+    const resetPatch: Partial<GlobalSettings> = {
+      logoUrl: defaultUrl,
+      invoiceLogoUrl: defaultUrl,
+      logoFit: 'edge-to-edge',
+      logoAlign: 'left',
+      logoHeight: 54,
+      showBrandText: true
+    };
+
     window.dispatchEvent(
       new CustomEvent('gfk-logo-updated', {
         detail: {
-          logoUrl: defaultUrl,
+          ...resetPatch,
           fit: 'edge-to-edge',
           alignment: 'left',
-          height: 54,
-          showBrandText: true
+          height: 54
         }
       })
     );
 
-    const db = getFirebaseFirestore();
-    setDoc(
-      doc(db, 'settings', 'global'),
-      {
-        logoUrl: defaultUrl,
-        invoiceLogoUrl: defaultUrl,
-        logoFit: 'edge-to-edge',
-        logoAlign: 'left',
-        logoHeight: 54,
-        showBrandText: true
-      },
-      { merge: true }
-    );
-
-    onLogoUpdated(defaultUrl);
+    onLogoUpdated(defaultUrl, resetPatch);
     showToast('Reset to default vector logo.');
   };
 
@@ -397,7 +415,10 @@ export default function LogoQuickUploader({
               onChange={(e) => {
                 const val = Number(e.target.value);
                 setLogoHeight(val);
-                saveAndPublish(activeLogo, fitMode, alignment, val, showBrandText);
+                if (sliderDebounceRef.current) clearTimeout(sliderDebounceRef.current);
+                sliderDebounceRef.current = setTimeout(() => {
+                  saveAndPublish(activeLogo, fitMode, alignment, val, showBrandText);
+                }, 300);
               }}
               className="w-full accent-emerald-600 cursor-pointer"
             />
