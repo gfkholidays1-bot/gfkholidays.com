@@ -28,6 +28,7 @@ import {
   getVideoSourceMode,
   setVideoSourceMode,
   isDirectVideoSource,
+  isUploadedVideoUrl,
   DEFAULT_SCENIC_HERO_VIDEO,
   StoredVideoItem,
   StorageAuditResult
@@ -65,7 +66,7 @@ export default function VideoUploaderWithProgress({
   defaultFallbackUrl = DEFAULT_SCENIC_HERO_VIDEO
 }: VideoUploaderWithProgressProps) {
   const [activeSourceMode, setActiveSourceMode] = useState<'upload' | 'url'>(() => {
-    if (currentVideoSource === 'upload' || currentVideoUrl?.startsWith('/api/cms-video/')) {
+    if (currentVideoSource === 'upload' || isUploadedVideoUrl(currentVideoUrl)) {
       return 'upload';
     }
     return getVideoSourceMode();
@@ -95,8 +96,7 @@ export default function VideoUploaderWithProgress({
   const [urlInput, setUrlInput] = useState<string>(() => {
     if (
       currentVideoUrl &&
-      !currentVideoUrl.startsWith('blob:') &&
-      !currentVideoUrl.startsWith('/api/cms-video/') &&
+      !isUploadedVideoUrl(currentVideoUrl) &&
       !currentVideoUrl.includes('viddler.com')
     ) {
       return currentVideoUrl;
@@ -144,21 +144,23 @@ export default function VideoUploaderWithProgress({
   useEffect(() => {
     let isMounted = true;
     const mode =
-      currentVideoSource === 'upload' || currentVideoUrl?.startsWith('/api/cms-video/')
+      currentVideoSource === 'upload' || isUploadedVideoUrl(currentVideoUrl)
         ? 'upload'
         : getVideoSourceMode();
 
     if (mode === 'upload') {
-      loadVideoBlob(storageKey).then((savedObjectUrl) => {
-        if (!isMounted) return;
-        if (savedObjectUrl) {
-          setActiveSourceMode('upload');
-          setActiveUrl(savedObjectUrl);
-        } else if (currentVideoUrl?.startsWith('/api/cms-video/')) {
-          setActiveSourceMode('upload');
-          setActiveUrl(currentVideoUrl);
-        }
-      });
+      if (isUploadedVideoUrl(currentVideoUrl)) {
+        setActiveSourceMode('upload');
+        setActiveUrl(currentVideoUrl);
+      } else {
+        loadVideoBlob(storageKey).then((savedObjectUrl) => {
+          if (!isMounted) return;
+          if (savedObjectUrl) {
+            setActiveSourceMode('upload');
+            setActiveUrl(savedObjectUrl);
+          }
+        });
+      }
     } else if (currentVideoUrl && !currentVideoUrl.startsWith('blob:')) {
       setActiveUrl(sanitizeInitialUrl(currentVideoUrl));
     }
@@ -174,10 +176,10 @@ export default function VideoUploaderWithProgress({
   useEffect(() => {
     if (!currentVideoUrl) return;
 
-    // If the incoming URL is an uploaded server video (/api/cms-video/...), always honor it as 'upload'
-    if (currentVideoUrl.startsWith('/api/cms-video/')) {
+    // If the incoming URL is an uploaded server video (/api/cms-video/... or /uploads/...), always honor it as 'upload'
+    if (isUploadedVideoUrl(currentVideoUrl)) {
       setActiveSourceMode('upload');
-      if (!activeUrl.startsWith('blob:')) {
+      if (!activeUrl.startsWith('blob:') && activeUrl !== currentVideoUrl) {
         setActiveUrl(currentVideoUrl);
       }
       if (currentVideoFileName) {
@@ -1038,13 +1040,22 @@ export default function VideoUploaderWithProgress({
                 loop
                 muted
                 playsInline
+                preload="auto"
                 controls={false}
                 disablePictureInPicture
                 disableRemotePlayback
                 tabIndex={-1}
                 onContextMenu={(e) => e.preventDefault()}
-                onSeeking={(e) => {
-                  e.preventDefault();
+                onEnded={(e) => {
+                  const v = e.currentTarget;
+                  v.currentTime = 0;
+                  v.play().catch(() => {});
+                }}
+                onPause={(e) => {
+                  const v = e.currentTarget;
+                  if (!document.hidden && !v.ended) {
+                    v.play().catch(() => {});
+                  }
                 }}
                 className="w-full h-full object-cover pointer-events-none select-none"
               />

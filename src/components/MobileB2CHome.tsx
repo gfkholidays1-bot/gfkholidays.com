@@ -3,7 +3,8 @@ import {
   loadVideoBlob,
   getVideoSourceMode,
   getUploadedServerVideoUrl,
-  isDirectVideoSource
+  isDirectVideoSource,
+  isUploadedVideoUrl
 } from '../lib/videoStorage';
 import {
   Search,
@@ -108,15 +109,21 @@ export default function MobileB2CHome({
   const resolvePreferredMobileVideo = (): string => {
     const isUploadMode =
       globalSettings.heroVideoSource === 'upload' ||
-      globalSettings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      isUploadedVideoUrl(globalSettings.heroVideoUrl) ||
       getVideoSourceMode() === 'upload';
 
     if (isUploadMode) {
       const serverUpload = getUploadedServerVideoUrl();
       if (serverUpload) return serverUpload;
-      if (globalSettings.heroVideoUrl?.startsWith('/api/cms-video/')) {
-        return globalSettings.heroVideoUrl;
+      if (isUploadedVideoUrl(globalSettings.heroVideoUrl)) {
+        return globalSettings.heroVideoUrl!;
       }
+      try {
+        const cachedHeroUrl = localStorage.getItem('gfk_hero_video_url');
+        if (cachedHeroUrl && !cachedHeroUrl.includes('viddler.com')) {
+          return cachedHeroUrl;
+        }
+      } catch (_e) {}
     }
 
     const rawUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
@@ -132,10 +139,15 @@ export default function MobileB2CHome({
     let isMounted = true;
     const isUploadMode =
       globalSettings.heroVideoSource === 'upload' ||
-      globalSettings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      isUploadedVideoUrl(globalSettings.heroVideoUrl) ||
       getVideoSourceMode() === 'upload';
 
-    if (isUploadMode) {
+    const alreadyHasUploadStream =
+      activeFeaturedVideo.startsWith('/api/cms-video/') ||
+      activeFeaturedVideo.startsWith('/uploads/') ||
+      activeFeaturedVideo.startsWith('blob:');
+
+    if (isUploadMode && !alreadyHasUploadStream) {
       loadVideoBlob('hero_background_video').then((heroBlob) => {
         if (isMounted && heroBlob) {
           setActiveFeaturedVideo(heroBlob);
@@ -144,9 +156,10 @@ export default function MobileB2CHome({
     }
 
     const handleVideoUpdated = (event: any) => {
-      const { videoUrl } = event.detail || {};
-      if (videoUrl) {
-        setActiveFeaturedVideo(videoUrl);
+      const { videoUrl, serverUrl } = event.detail || {};
+      const nextUrl = serverUrl || videoUrl;
+      if (nextUrl) {
+        setActiveFeaturedVideo(nextUrl);
       }
     };
 
@@ -160,6 +173,7 @@ export default function MobileB2CHome({
   useEffect(() => {
     const el = mobileVideoRef.current;
     if (!el) return;
+    el.loop = true;
     const playPromise = el.play();
     if (playPromise !== undefined) {
       playPromise.catch(() => {
@@ -173,7 +187,7 @@ export default function MobileB2CHome({
     const incomingUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
     if (!incomingUrl) return;
 
-    if (incomingUrl.startsWith('/api/cms-video/')) {
+    if (isUploadedVideoUrl(incomingUrl)) {
       if (!activeFeaturedVideo.startsWith('blob:') && activeFeaturedVideo !== incomingUrl) {
         setActiveFeaturedVideo(incomingUrl);
       }
@@ -183,12 +197,9 @@ export default function MobileB2CHome({
     if (
       getVideoSourceMode() === 'upload' ||
       globalSettings.heroVideoSource === 'upload' ||
-      activeFeaturedVideo.startsWith('blob:') ||
-      activeFeaturedVideo.startsWith('/api/cms-video/')
+      isUploadedVideoUrl(activeFeaturedVideo)
     ) {
-      if (globalSettings.heroVideoSource !== 'url') {
-        return;
-      }
+      return;
     }
 
     if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeFeaturedVideo) {
@@ -436,6 +447,7 @@ export default function MobileB2CHome({
                     loop
                     muted={videoMuted}
                     playsInline
+                    preload="auto"
                     controls={false}
                     disablePictureInPicture
                     disableRemotePlayback
@@ -443,6 +455,29 @@ export default function MobileB2CHome({
                     aria-hidden="true"
                     onContextMenu={(e) => e.preventDefault()}
                     onKeyDown={(e) => e.preventDefault()}
+                    onEnded={(e) => {
+                      const v = e.currentTarget;
+                      v.currentTime = 0;
+                      v.play().catch(() => {});
+                    }}
+                    onPause={(e) => {
+                      const v = e.currentTarget;
+                      if (!document.hidden && !v.ended) {
+                        v.play().catch(() => {});
+                      }
+                    }}
+                    onError={() => {
+                      loadVideoBlob('hero_background_video').then((blobUrl) => {
+                        if (blobUrl && blobUrl !== src) {
+                          setActiveFeaturedVideo(blobUrl);
+                        } else {
+                          const fallback = 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+                          if (src !== fallback) {
+                            setActiveFeaturedVideo(fallback);
+                          }
+                        }
+                      });
+                    }}
                     className="absolute inset-0 w-full h-full object-cover pointer-events-none select-none"
                   />
                 );

@@ -33,6 +33,19 @@ export interface StorageAuditResult {
   libraryCount: number;
 }
 
+// Cache object URLs by key + blob size so repeated loadVideoBlob calls return the exact same blob: URL
+// without unmounting or restarting <video> elements after 1-2 seconds
+const activeBlobUrls = new Map<string, { url: string; size: number }>();
+
+export function isUploadedVideoUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return (
+    url.startsWith('blob:') ||
+    url.startsWith('/api/cms-video/') ||
+    url.startsWith('/uploads/')
+  );
+}
+
 /**
  * Get or set the explicit video source priority ('upload' vs 'url').
  * When 'upload' is active, external URLs are prevented from overriding the uploaded video file.
@@ -42,7 +55,10 @@ export function getVideoSourceMode(): 'upload' | 'url' {
   try {
     const mode = localStorage.getItem('gfk_video_source_mode');
     if (mode === 'upload' || mode === 'url') return mode;
-    if (localStorage.getItem('gfk_video_cached_hero_background_video') === 'true') {
+    if (
+      localStorage.getItem('gfk_video_cached_hero_background_video') === 'true' ||
+      Boolean(localStorage.getItem('gfk_uploaded_server_video_url'))
+    ) {
       return 'upload';
     }
   } catch (_e) {}
@@ -146,7 +162,8 @@ export async function uploadVideoToServer(
       },
       body: blob
     });
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       if (data && data.videoUrl) {
         return data.videoUrl as string;
@@ -221,6 +238,10 @@ export async function saveVideoBlob(
 
   // 2. Save in IndexedDB for instant 0ms local blob playback
   const objectUrl = URL.createObjectURL(blob);
+  activeBlobUrls.set('hero_background_video', { url: objectUrl, size: blob.size });
+  activeBlobUrls.set('featured_attractions_video', { url: objectUrl, size: blob.size });
+  activeBlobUrls.set(storageKey, { url: objectUrl, size: blob.size });
+
   try {
     const db = await openVideoDatabase();
     await new Promise<void>((resolve, reject) => {
@@ -301,6 +322,7 @@ export async function registerUrlInLibrary(
 ): Promise<void> {
   // Explicitly switch mode to 'url' and remove active blob overrides so uploaded video no longer blocks URL
   setVideoSourceMode('url');
+  activeBlobUrls.clear();
   await deleteVideoBlob('hero_background_video');
   await deleteVideoBlob('featured_attractions_video');
 
@@ -361,7 +383,13 @@ export async function loadVideoBlob(key: string = UNIFIED_VIDEO_STORAGE_KEY): Pr
     return null;
   }
 
-  // First check if we have a server-streamed URL for the uploaded video
+  // Return cached in-memory blob URL immediately if already created in this session
+  const cachedMem = activeBlobUrls.get(key);
+  if (cachedMem && cachedMem.url) {
+    return cachedMem.url;
+  }
+
+  // Check if we have a server-streamed URL for the uploaded video
   const serverUrl = getUploadedServerVideoUrl();
 
   try {
@@ -374,7 +402,14 @@ export async function loadVideoBlob(key: string = UNIFIED_VIDEO_STORAGE_KEY): Pr
       request.onsuccess = (event: any) => {
         const blob = event.target.result;
         if (blob instanceof Blob) {
-          resolve(URL.createObjectURL(blob));
+          const existing = activeBlobUrls.get(key);
+          if (existing && existing.size === blob.size) {
+            resolve(existing.url);
+            return;
+          }
+          const created = URL.createObjectURL(blob);
+          activeBlobUrls.set(key, { url: created, size: blob.size });
+          resolve(created);
         } else {
           resolve(serverUrl);
         }
@@ -657,7 +692,9 @@ export function isDirectVideoSource(src?: string): boolean {
     src.startsWith('blob:') ||
     src.startsWith('data:video') ||
     src.startsWith('/api/cms-video/') ||
+    src.startsWith('/uploads/') ||
     src.includes('/api/cms-video/') ||
+    src.includes('/uploads/') ||
     src.includes('.mp4') ||
     src.includes('.webm') ||
     src.includes('.mov') ||

@@ -79,12 +79,20 @@ function loadStoreFromDisk(): CmsStore {
   return { collections: {} };
 }
 
+const PUBLIC_SEED_FILE = path.join(__dirname, 'public', 'cms-seed.json');
+const PUBLIC_UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
+
 function saveStoreToDisk(store: CmsStore) {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(STORE_FILE, JSON.stringify(store), 'utf-8');
+    const serialized = JSON.stringify(store);
+    fs.writeFileSync(STORE_FILE, serialized, 'utf-8');
+    // Also mirror to public/cms-seed.json so GitHub static builds include the latest CMS state
+    if (fs.existsSync(path.join(__dirname, 'public'))) {
+      fs.writeFileSync(PUBLIC_SEED_FILE, serialized, 'utf-8');
+    }
   } catch (err) {
     console.warn('[CMS Store] Failed to write store file:', err);
   }
@@ -161,6 +169,16 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '50mb' }));
+
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Video-Type, X-Video-Name');
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+    next();
+  });
 
   // SSE clients for instant real-time cross-browser updates
   const sseClients = new Set<express.Response>();
@@ -264,9 +282,17 @@ async function startServer() {
           'utf-8'
         );
 
+        // Also mirror to public/uploads/${key}.mp4 so GitHub static deployments serve the uploaded video file
+        try {
+          if (!fs.existsSync(PUBLIC_UPLOADS_DIR)) {
+            fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
+          }
+          fs.writeFileSync(path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`), buf);
+        } catch (_e) {}
+
         const version = Date.now();
         const videoUrl = `/api/cms-video/${key}?v=${version}`;
-        return res.json({ ok: true, videoUrl, fileName, size: buf.length });
+        return res.json({ ok: true, videoUrl, staticUrl: `/uploads/${key}.mp4?v=${version}`, fileName, size: buf.length });
       } catch (err: any) {
         console.error('[CMS Video Upload Error]:', err);
         return res.status(500).json({ error: err?.message || 'Failed to save video' });
@@ -307,8 +333,10 @@ async function startServer() {
       const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
       const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
       const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
+      const publicUploadPath = path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`);
       if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
       if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+      if (fs.existsSync(publicUploadPath)) fs.unlinkSync(publicUploadPath);
       return res.json({ ok: true });
     } catch (_e) {
       return res.json({ ok: false });

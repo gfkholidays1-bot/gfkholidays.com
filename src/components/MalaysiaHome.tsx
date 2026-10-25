@@ -3,7 +3,8 @@ import {
   loadVideoBlob,
   getVideoSourceMode,
   getUploadedServerVideoUrl,
-  isDirectVideoSource
+  isDirectVideoSource,
+  isUploadedVideoUrl
 } from '../lib/videoStorage';
 import {
   Package,
@@ -107,15 +108,21 @@ export default function MalaysiaHome({
   const resolvePreferredVideoUrl = (): string => {
     const isUploadMode =
       settings.heroVideoSource === 'upload' ||
-      settings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      isUploadedVideoUrl(settings.heroVideoUrl) ||
       getVideoSourceMode() === 'upload';
 
     if (isUploadMode) {
       const serverUpload = getUploadedServerVideoUrl();
       if (serverUpload) return serverUpload;
-      if (settings.heroVideoUrl?.startsWith('/api/cms-video/')) {
-        return settings.heroVideoUrl;
+      if (isUploadedVideoUrl(settings.heroVideoUrl)) {
+        return settings.heroVideoUrl!;
       }
+      try {
+        const cachedHeroUrl = localStorage.getItem('gfk_hero_video_url');
+        if (cachedHeroUrl && !cachedHeroUrl.includes('viddler.com')) {
+          return cachedHeroUrl;
+        }
+      } catch (_e) {}
     }
 
     const rawUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
@@ -127,16 +134,22 @@ export default function MalaysiaHome({
 
   const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(resolvePreferredVideoUrl);
 
-  // Load uploaded video from IndexedDB / Server if in upload mode, and listen for live Admin updates
+  // Load uploaded video from IndexedDB ONLY if we don't already have an active server stream playing,
+  // so we never swap <video src> 2 seconds into playback
   useEffect(() => {
     let isMounted = true;
 
     const isUploadMode =
       settings.heroVideoSource === 'upload' ||
-      settings.heroVideoUrl?.startsWith('/api/cms-video/') ||
+      isUploadedVideoUrl(settings.heroVideoUrl) ||
       getVideoSourceMode() === 'upload';
 
-    if (isUploadMode) {
+    const alreadyHasUploadStream =
+      activeHeroVideoUrl.startsWith('/api/cms-video/') ||
+      activeHeroVideoUrl.startsWith('/uploads/') ||
+      activeHeroVideoUrl.startsWith('blob:');
+
+    if (isUploadMode && !alreadyHasUploadStream) {
       loadVideoBlob('hero_background_video').then((blobUrl) => {
         if (isMounted && blobUrl) {
           setActiveHeroVideoUrl(blobUrl);
@@ -145,9 +158,10 @@ export default function MalaysiaHome({
     }
 
     const handleVideoUpdated = (event: any) => {
-      const { videoUrl } = event.detail || {};
-      if (videoUrl) {
-        setActiveHeroVideoUrl(videoUrl);
+      const { videoUrl, serverUrl } = event.detail || {};
+      const nextUrl = serverUrl || videoUrl;
+      if (nextUrl) {
+        setActiveHeroVideoUrl(nextUrl);
       }
     };
 
@@ -162,6 +176,7 @@ export default function MalaysiaHome({
   useEffect(() => {
     const el = heroVideoRef.current;
     if (!el) return;
+    el.loop = true;
     const playPromise = el.play();
     if (playPromise !== undefined) {
       playPromise.catch(() => {
@@ -176,8 +191,8 @@ export default function MalaysiaHome({
     const incomingUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
     if (!incomingUrl) return;
 
-    // If incoming URL is a server-uploaded video (/api/cms-video/...), always apply it unless a local blob is already playing
-    if (incomingUrl.startsWith('/api/cms-video/')) {
+    // If incoming URL is a server-uploaded video (/api/cms-video/... or /uploads/...), apply it unless already playing
+    if (isUploadedVideoUrl(incomingUrl)) {
       if (!activeHeroVideoUrl.startsWith('blob:') && activeHeroVideoUrl !== incomingUrl) {
         setActiveHeroVideoUrl(incomingUrl);
       }
@@ -188,12 +203,9 @@ export default function MalaysiaHome({
     if (
       getVideoSourceMode() === 'upload' ||
       settings.heroVideoSource === 'upload' ||
-      activeHeroVideoUrl.startsWith('blob:') ||
-      activeHeroVideoUrl.startsWith('/api/cms-video/')
+      isUploadedVideoUrl(activeHeroVideoUrl)
     ) {
-      if (settings.heroVideoSource !== 'url') {
-        return;
-      }
+      return;
     }
 
     if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeHeroVideoUrl) {
@@ -383,6 +395,7 @@ export default function MalaysiaHome({
                     loop
                     muted={heroMuted}
                     playsInline
+                    preload="auto"
                     controls={false}
                     disablePictureInPicture
                     disableRemotePlayback
@@ -390,11 +403,28 @@ export default function MalaysiaHome({
                     aria-hidden="true"
                     onContextMenu={(e) => e.preventDefault()}
                     onKeyDown={(e) => e.preventDefault()}
-                    onSeeking={(e) => {
-                      e.preventDefault();
+                    onEnded={(e) => {
+                      const v = e.currentTarget;
+                      v.currentTime = 0;
+                      v.play().catch(() => {});
                     }}
-                    onEnded={() => {
-                      heroVideoRef.current?.play().catch(() => {});
+                    onPause={(e) => {
+                      const v = e.currentTarget;
+                      if (!document.hidden && !v.ended) {
+                        v.play().catch(() => {});
+                      }
+                    }}
+                    onError={() => {
+                      loadVideoBlob('hero_background_video').then((blobUrl) => {
+                        if (blobUrl && blobUrl !== src) {
+                          setActiveHeroVideoUrl(blobUrl);
+                        } else {
+                          const fallback = 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+                          if (src !== fallback) {
+                            setActiveHeroVideoUrl(fallback);
+                          }
+                        }
+                      });
                     }}
                     className="w-[200%] h-[200%] min-w-full min-h-full object-cover scale-110 pointer-events-none select-none"
                     style={{ pointerEvents: 'none', userSelect: 'none' }}

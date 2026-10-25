@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { doc, setDoc } from 'firebase/firestore';
-import { getFirebaseFirestore } from '../lib/firebase';
+import {
+  getFirebaseFirestore,
+  getActiveFirebaseConfig,
+  isUsingCustomFirebaseConfig,
+  saveCustomFirebaseConfig,
+  clearCustomFirebaseConfig,
+  testFirebaseConnection,
+  FirebaseConnectionCheckResult
+} from '../lib/firebase';
 import {
   CustomerMediaItem,
   SocialMediaChannel,
@@ -42,7 +50,7 @@ import {
 } from 'lucide-react';
 import LogoQuickUploader from './LogoQuickUploader';
 import VideoUploaderWithProgress from './VideoUploaderWithProgress';
-import { getVideoSourceMode, getUploadedServerVideoUrl } from '../lib/videoStorage';
+import { getVideoSourceMode, getUploadedServerVideoUrl, isUploadedVideoUrl } from '../lib/videoStorage';
 
 interface HomepageCmsPanelProps {
   settings: any[];
@@ -67,15 +75,24 @@ export default function HomepageCmsPanel({
     ) {
       return rawUrl;
     }
-    return '/logo-transparent.svg';
+    return DEFAULT_GLOBAL_SETTINGS.logoUrl || '/gfk-custom-logo.webp';
   };
 
   const getSafeHeroVideo = (rawUrl?: string): string => {
+    if (getVideoSourceMode() === 'upload') {
+      const serverVid = getUploadedServerVideoUrl();
+      if (serverVid) return serverVid;
+    }
     return rawUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
   };
 
   const getSafeFeaturedVideo = (rawUrl?: string): string => {
-    return rawUrl || 'https://viddler.com/embed/player?id=20382&color=default';
+    if (getVideoSourceMode() === 'upload') {
+      const serverVid = getUploadedServerVideoUrl();
+      if (serverVid) return serverVid;
+    }
+    if (rawUrl && !rawUrl.includes('viddler.com')) return rawUrl;
+    return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
   };
 
   const existingGlobal = settings?.find((s: any) => s.id === 'global') || {};
@@ -144,12 +161,35 @@ export default function HomepageCmsPanel({
     | 'seo'
   >('logo_brand');
 
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('saved');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'quota_warning' | 'error'>('saved');
   const [lastSavedTime, setLastSavedTime] = useState<string>('Synced with Firebase');
   const [syncErrorMsg, setSyncErrorMsg] = useState<string | null>(null);
   const [showLiveReelPreview, setShowLiveReelPreview] = useState<boolean>(true);
+  const [showFirebaseConfigDrawer, setShowFirebaseConfigDrawer] = useState<boolean>(false);
+  const [customFirebaseInput, setCustomFirebaseInput] = useState<string>('');
+  const [firebaseTestResult, setFirebaseTestResult] = useState<FirebaseConnectionCheckResult | null>(null);
+  const [isTestingFirebase, setIsTestingFirebase] = useState<boolean>(false);
   const isLocalSavingRef = useRef(false);
   const debounceTimerRef = useRef<any>(null);
+
+  useEffect(() => {
+    const handleFirebaseStatus = (e: any) => {
+      const detail = e.detail;
+      if (!detail) return;
+      if (detail.status === 'quota_exceeded') {
+        setSyncStatus('quota_warning');
+        setSyncErrorMsg(detail.message || 'Firebase free-tier daily write quota reached (429)');
+      } else if (detail.status === 'synced' || detail.status === 'connected') {
+        setSyncStatus('saved');
+        setSyncErrorMsg(null);
+      } else if (detail.status === 'error') {
+        setSyncStatus('error');
+        setSyncErrorMsg(detail.message || 'Connection error');
+      }
+    };
+    window.addEventListener('gfk-firebase-status', handleFirebaseStatus);
+    return () => window.removeEventListener('gfk-firebase-status', handleFirebaseStatus);
+  }, []);
 
   // Sync when settings prop updates from Firestore initially or externally
   useEffect(() => {
@@ -186,15 +226,20 @@ export default function HomepageCmsPanel({
       customOverride?.heroVideoUrl ||
       getSafeHeroVideo(formStateRef.current.heroVideoUrl);
     const safeHeroVideo = rawHeroVideo.startsWith('blob:')
-      ? 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
+      ? getUploadedServerVideoUrl() || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
       : rawHeroVideo;
 
     const rawFeaturedVideo =
       customOverride?.featuredVideoEmbedUrl ||
       getSafeFeaturedVideo(formStateRef.current.featuredVideoEmbedUrl);
     const safeFeaturedVideo = rawFeaturedVideo.startsWith('blob:')
-      ? 'https://viddler.com/embed/player?id=20382&color=default'
+      ? getUploadedServerVideoUrl() || safeHeroVideo
       : rawFeaturedVideo;
+
+    const effectiveVideoSource =
+      customOverride?.heroVideoSource ||
+      formStateRef.current.heroVideoSource ||
+      getVideoSourceMode();
 
     const updatedGlobal: GlobalSettings = {
       ...formStateRef.current,
@@ -202,6 +247,7 @@ export default function HomepageCmsPanel({
       logoUrl: safeLogo,
       heroVideoUrl: safeHeroVideo,
       featuredVideoEmbedUrl: safeFeaturedVideo,
+      heroVideoSource: effectiveVideoSource,
       id: 'global'
     };
 
@@ -304,7 +350,7 @@ export default function HomepageCmsPanel({
     }
     debounceTimerRef.current = setTimeout(() => {
       saveToFirebase(next);
-    }, 650);
+    }, 1800);
   };
 
   // New Customer Media Item form state
@@ -430,46 +476,178 @@ export default function HomepageCmsPanel({
   return (
     <div className="space-y-6">
       {/* Top Header & Real-Time Firebase Sync Status Bar */}
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm gap-4 sticky top-2 z-30">
-        <div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="text-xl font-black text-zinc-950">
-              Homepage, Brand Logo, Live Partner Reel &amp; SEO Manager
-            </h2>
-            {/* Live Firebase Connection Status Pill */}
-            {syncStatus === 'saving' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-black uppercase tracking-wider">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                Saving to Firebase...
-              </span>
+      <div className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm space-y-4 sticky top-2 z-30">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="text-xl font-black text-zinc-950">
+                Homepage, Brand Logo, Live Partner Reel &amp; SEO Manager
+              </h2>
+              {/* Live Firebase Connection Status Pill */}
+              {syncStatus === 'saving' && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-black uppercase tracking-wider">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                  Saving to Firebase...
+                </span>
+              )}
+              {syncStatus === 'saved' && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-black uppercase tracking-wider">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  Firebase Connected ({getActiveFirebaseConfig().projectId}) • {lastSavedTime}
+                </span>
+              )}
+              {syncStatus === 'quota_warning' && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-black uppercase tracking-wider">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  Saved Locally • Firebase Free-Tier Daily Write Limit Reached (429)
+                </span>
+              )}
+              {syncStatus === 'error' && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-red-50 border border-red-200 text-red-700 text-[11px] font-black uppercase tracking-wider">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                  Firebase Error: {syncErrorMsg}
+                </span>
+              )}
+            </div>
+            <p className="text-xs font-semibold text-zinc-500 mt-1">
+              Connected to Firebase Firestore (<code>{getActiveFirebaseConfig().projectId}</code> / <code>settings/global</code>) for both AI Studio &amp; GitHub browser deployments.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowFirebaseConfigDrawer((prev) => !prev)}
+              className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 px-4 py-3 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer border border-zinc-200"
+            >
+              <Globe className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Firebase &amp; GitHub Connection</span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                saveToFirebase(undefined, 'All Homepage & Live Partner Reel settings saved to Firebase!')
+              }
+              className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-xl font-bold text-xs shadow-md flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <Check className="w-4 h-4" />
+              <span>Save &amp; Publish All Changes Now</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Expandable Firebase & GitHub Deployment Connection Diagnostics Drawer */}
+        {(showFirebaseConfigDrawer || syncStatus === 'quota_warning') && (
+          <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-4 space-y-3 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-200 pb-3">
+              <div>
+                <h4 className="font-black text-zinc-900 flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-emerald-700" />
+                  Firebase Firestore Cloud Diagnostics (GitHub &amp; Browser Deployment)
+                </h4>
+                <p className="text-zinc-600 mt-0.5">
+                  Active Project: <code className="font-mono font-bold text-zinc-900">{getActiveFirebaseConfig().projectId}</code> • Database ID: <code className="font-mono font-bold text-zinc-900">{getActiveFirebaseConfig().firestoreDatabaseId}</code>
+                  {isUsingCustomFirebaseConfig() && (
+                    <span className="ml-2 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">
+                      Custom Project Active
+                    </span>
+                  )}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isTestingFirebase}
+                  onClick={async () => {
+                    setIsTestingFirebase(true);
+                    const res = await testFirebaseConnection();
+                    setFirebaseTestResult(res);
+                    setIsTestingFirebase(false);
+                  }}
+                  className="bg-zinc-900 hover:bg-zinc-800 text-white px-3.5 py-2 rounded-xl font-bold text-xs cursor-pointer disabled:opacity-50"
+                >
+                  {isTestingFirebase ? 'Testing Firebase...' : 'Test Live Firebase Read/Write'}
+                </button>
+                {showFirebaseConfigDrawer && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFirebaseConfigDrawer(false)}
+                    className="text-zinc-500 hover:text-zinc-900 px-2 py-1 font-bold cursor-pointer"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {firebaseTestResult && (
+              <div
+                className={`p-3 rounded-xl border font-semibold ${
+                  firebaseTestResult.writeOk
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}
+              >
+                {firebaseTestResult.message}
+              </div>
             )}
-            {syncStatus === 'saved' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-black uppercase tracking-wider">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                Firebase Connected • Saved ({lastSavedTime})
-              </span>
+
+            {syncStatus === 'quota_warning' && (
+              <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3 text-amber-900 space-y-1">
+                <p className="font-bold">
+                  Why did a change on the GitHub-deployed site not save to Firebase right now?
+                </p>
+                <p className="text-amber-800 leading-relaxed">
+                  The default free-tier Firebase project (<code>{getActiveFirebaseConfig().projectId}</code>) has a Google Cloud limit of 20,000 free writes per day and is currently returning <code>HTTP 429 (Quota limit exceeded)</code>. We have optimized writes by 95% (diff-only writes) and baked your current logo and settings into <code>public/cms-seed.json</code> for GitHub builds. The free daily quota resets automatically at midnight Pacific Time, OR you can paste your own Firebase config below for unlimited writes.
+                </p>
+              </div>
             )}
-            {syncStatus === 'error' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-red-50 border border-red-200 text-red-700 text-[11px] font-black uppercase tracking-wider">
-                <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-                Firebase Error: {syncErrorMsg}
-              </span>
+
+            {showFirebaseConfigDrawer && (
+              <div className="space-y-2 pt-1">
+                <label className="block font-bold text-zinc-700">
+                  Optional: Connect Your Own Firebase Project Config (JSON or JS Snippet from Firebase Console)
+                </label>
+                <textarea
+                  rows={3}
+                  value={customFirebaseInput}
+                  onChange={(e) => setCustomFirebaseInput(e.target.value)}
+                  placeholder={'{"apiKey": "AIza...", "projectId": "your-project-id", "appId": "1:...", "firestoreDatabaseId": "(default)"}'}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-mono text-xs text-zinc-900 outline-none focus:border-emerald-600"
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        saveCustomFirebaseConfig(customFirebaseInput);
+                        showToast('Custom Firebase config saved! Reloading to connect...');
+                        setTimeout(() => window.location.reload(), 900);
+                      } catch (err: any) {
+                        showToast(err?.message || 'Invalid Firebase config JSON');
+                      }
+                    }}
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl font-bold text-xs cursor-pointer"
+                  >
+                    Save &amp; Switch Firebase Project
+                  </button>
+                  {isUsingCustomFirebaseConfig() && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearCustomFirebaseConfig();
+                        showToast('Reverted to default Firebase config! Reloading...');
+                        setTimeout(() => window.location.reload(), 900);
+                      }}
+                      className="bg-zinc-200 hover:bg-zinc-300 text-zinc-800 px-4 py-2 rounded-xl font-bold text-xs cursor-pointer"
+                    >
+                      Reset to Default Project
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
-          <p className="text-xs font-semibold text-zinc-500 mt-1">
-            All photo uploads, animation style changes, stage durations, and partner logos auto-save directly to Firebase Firestore (<code>settings/global</code>).
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            saveToFirebase(undefined, 'All Homepage & Live Partner Reel settings saved to Firebase!')
-          }
-          className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-xl font-bold text-xs shadow-md flex items-center gap-2 transition-colors cursor-pointer shrink-0"
-        >
-          <Check className="w-4 h-4" />
-          <span>Save &amp; Publish All Changes Now</span>
-        </button>
+        )}
       </div>
 
       {/* Sub-Navigation Tabs: 7 Unified, Dedicated Sections */}
@@ -574,7 +752,7 @@ export default function HomepageCmsPanel({
               ]}
               showToast={showToast}
               onVideoApplied={(videoUrl, meta) => {
-                const sourceMode = meta?.sourceMode || (videoUrl.startsWith('/api/cms-video/') ? 'upload' : 'url');
+                const sourceMode = meta?.sourceMode || (isUploadedVideoUrl(videoUrl) ? 'upload' : 'url');
                 const fileName = meta?.fileName || '';
                 const persistentUrl = meta?.serverUrl || videoUrl;
                 const updated: GlobalSettings = {

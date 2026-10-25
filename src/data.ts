@@ -1268,8 +1268,12 @@ export const DEFAULT_SEO_KEYWORDS =
 
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   id: 'global',
-  logoUrl: '/logo-transparent.svg',
-  invoiceLogoUrl: '/logo-transparent.svg',
+  logoUrl: '/gfk-custom-logo.webp',
+  invoiceLogoUrl: '/gfk-custom-logo.webp',
+  showBrandText: false,
+  logoHeight: 60,
+  logoFit: 'edge-to-edge',
+  logoAlign: 'left',
   logoScale: 100,
   logoPadding: 0,
   logoRounded: 'none',
