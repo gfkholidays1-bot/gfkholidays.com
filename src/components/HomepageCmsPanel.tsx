@@ -52,7 +52,12 @@ import {
 } from 'lucide-react';
 import LogoQuickUploader from './LogoQuickUploader';
 import VideoUploaderWithProgress from './VideoUploaderWithProgress';
-import { getVideoSourceMode, getUploadedServerVideoUrl, isUploadedVideoUrl } from '../lib/videoStorage';
+import {
+  getVideoSourceMode,
+  getUploadedServerVideoUrl,
+  isUploadedVideoUrl,
+  ensureUploadedVideoSyncedToServer
+} from '../lib/videoStorage';
 
 interface HomepageCmsPanelProps {
   settings: any[];
@@ -80,18 +85,24 @@ export default function HomepageCmsPanel({
     return DEFAULT_GLOBAL_SETTINGS.logoUrl || '/gfk-custom-logo.webp';
   };
 
-  const getSafeHeroVideo = (rawUrl?: string): string => {
-    if (getVideoSourceMode() === 'upload') {
+  const getSafeHeroVideo = (rawUrl?: string, sourceOverride?: 'upload' | 'url'): string => {
+    const activeSource = sourceOverride || getVideoSourceMode();
+    if (activeSource === 'upload') {
       const serverVid = getUploadedServerVideoUrl();
       if (serverVid) return serverVid;
+      if (rawUrl && isUploadedVideoUrl(rawUrl) && !rawUrl.startsWith('blob:')) return rawUrl;
+      return '/api/cms-video/hero_background_video';
     }
     return rawUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
   };
 
-  const getSafeFeaturedVideo = (rawUrl?: string): string => {
-    if (getVideoSourceMode() === 'upload') {
+  const getSafeFeaturedVideo = (rawUrl?: string, sourceOverride?: 'upload' | 'url'): string => {
+    const activeSource = sourceOverride || getVideoSourceMode();
+    if (activeSource === 'upload') {
       const serverVid = getUploadedServerVideoUrl();
       if (serverVid) return serverVid;
+      if (rawUrl && isUploadedVideoUrl(rawUrl) && !rawUrl.startsWith('blob:')) return rawUrl;
+      return '/api/cms-video/hero_background_video';
     }
     if (rawUrl && !rawUrl.includes('viddler.com')) return rawUrl;
     return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
@@ -108,8 +119,8 @@ export default function HomepageCmsPanel({
     logoHeight: g?.logoHeight !== undefined ? Number(g.logoHeight) : 54,
     logoFit: g?.logoFit || 'edge-to-edge',
     logoAlign: g?.logoAlign || 'left',
-    heroVideoUrl: getSafeHeroVideo(g?.heroVideoUrl),
-    featuredVideoEmbedUrl: getSafeFeaturedVideo(g?.featuredVideoEmbedUrl),
+    heroVideoUrl: getSafeHeroVideo(g?.heroVideoUrl, g?.heroVideoSource),
+    featuredVideoEmbedUrl: getSafeFeaturedVideo(g?.featuredVideoEmbedUrl, g?.heroVideoSource),
     customerMedia: Array.isArray(g?.customerMedia)
       ? g.customerMedia
       : DEFAULT_CUSTOMER_MEDIA,
@@ -176,6 +187,9 @@ export default function HomepageCmsPanel({
 
   useEffect(() => {
     let mounted = true;
+    // Automatically ensure any video stored in this browser's IndexedDB is uploaded in 4MB chunks to the server & synced to Firestore
+    ensureUploadedVideoSyncedToServer('hero_background_video', formStateRef.current.heroVideoFileName);
+
     // Automatically verify live Firebase read AND write status on mount so we never show a false green "Connected" badge
     testFirebaseConnection().then((res) => {
       if (!mounted) return;
@@ -247,24 +261,46 @@ export default function HomepageCmsPanel({
       customOverride?.logoUrl ||
       getSafeActiveLogo(formStateRef.current.logoUrl);
 
-    const rawHeroVideo =
-      customOverride?.heroVideoUrl ||
-      getSafeHeroVideo(formStateRef.current.heroVideoUrl);
-    const safeHeroVideo = rawHeroVideo.startsWith('blob:')
-      ? getUploadedServerVideoUrl() || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
-      : rawHeroVideo;
-
-    const rawFeaturedVideo =
-      customOverride?.featuredVideoEmbedUrl ||
-      getSafeFeaturedVideo(formStateRef.current.featuredVideoEmbedUrl);
-    const safeFeaturedVideo = rawFeaturedVideo.startsWith('blob:')
-      ? getUploadedServerVideoUrl() || safeHeroVideo
-      : rawFeaturedVideo;
-
     const effectiveVideoSource =
       customOverride?.heroVideoSource ||
       formStateRef.current.heroVideoSource ||
       getVideoSourceMode();
+
+    const effectiveFileName =
+      customOverride?.heroVideoFileName !== undefined
+        ? customOverride.heroVideoFileName
+        : formStateRef.current.heroVideoFileName;
+
+    let syncedServerVideoUrl = getUploadedServerVideoUrl();
+    if (effectiveVideoSource === 'upload' && !syncedServerVideoUrl) {
+      syncedServerVideoUrl = await ensureUploadedVideoSyncedToServer(
+        'hero_background_video',
+        effectiveFileName
+      );
+    }
+
+    const rawHeroVideo =
+      customOverride?.heroVideoUrl ||
+      getSafeHeroVideo(formStateRef.current.heroVideoUrl, effectiveVideoSource);
+    const safeHeroVideo =
+      effectiveVideoSource === 'upload'
+        ? syncedServerVideoUrl ||
+          (rawHeroVideo.startsWith('/api/cms-video/') || rawHeroVideo.startsWith('/uploads/')
+            ? rawHeroVideo
+            : '/api/cms-video/hero_background_video')
+        : rawHeroVideo.startsWith('blob:')
+        ? syncedServerVideoUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
+        : rawHeroVideo;
+
+    const rawFeaturedVideo =
+      customOverride?.featuredVideoEmbedUrl ||
+      getSafeFeaturedVideo(formStateRef.current.featuredVideoEmbedUrl, effectiveVideoSource);
+    const safeFeaturedVideo =
+      effectiveVideoSource === 'upload'
+        ? safeHeroVideo
+        : rawFeaturedVideo.startsWith('blob:')
+        ? syncedServerVideoUrl || safeHeroVideo
+        : rawFeaturedVideo;
 
     const updatedGlobal: GlobalSettings = {
       ...formStateRef.current,

@@ -144,33 +144,109 @@ function saveStoredVideosList(storageKey: string, list: StoredVideoItem[]): void
   } catch (_e) {}
 }
 
+import { getFirestoreRestBaseUrl, getActiveFirebaseConfig } from './firebase';
+
 /**
- * Upload video binary to Express backend (/api/cms-video/hero_background_video) so it persists across browsers & tabs
+ * Patch Firebase Firestore settings/global with the active video URL & metadata
+ * so all browsers and devices receive the real-time update immediately
+ */
+export async function patchFirestoreVideoSettings(
+  videoUrl: string,
+  fileName: string,
+  sourceMode: 'upload' | 'url'
+): Promise<boolean> {
+  try {
+    const baseUrl = getFirestoreRestBaseUrl();
+    const apiKey = getActiveFirebaseConfig().apiKey;
+    const maskParams = [
+      'updateMask.fieldPaths=heroVideoUrl',
+      'updateMask.fieldPaths=featuredVideoEmbedUrl',
+      'updateMask.fieldPaths=heroVideoSource',
+      'updateMask.fieldPaths=heroVideoFileName',
+      'updateMask.fieldPaths=_updatedAt'
+    ].join('&');
+    const keyQuery = apiKey ? `&key=${encodeURIComponent(apiKey)}` : '';
+    const res = await fetch(`${baseUrl}/settings/global?${maskParams}${keyQuery}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fields: {
+          heroVideoUrl: { stringValue: videoUrl },
+          featuredVideoEmbedUrl: { stringValue: videoUrl },
+          heroVideoSource: { stringValue: sourceMode },
+          heroVideoFileName: { stringValue: fileName || '' },
+          _updatedAt: { integerValue: String(Date.now()) }
+        }
+      })
+    });
+    return res.ok;
+  } catch (_e) {
+    return false;
+  }
+}
+
+/**
+ * Upload video binary in 4MB chunks to Express backend (/api/cms-video-chunk/:key)
+ * so even 50MB-250MB videos bypass Google Cloud Run's 32MB request limit and persist across all browsers
  */
 export async function uploadVideoToServer(
   storageKey: string,
   blob: Blob,
-  fileName: string
+  fileName: string,
+  onProgress?: (percent: number, loadedMb: string, totalMb: string) => void
 ): Promise<string | null> {
+  const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB per chunk
+  const totalBytes = blob.size;
+  const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
+  const totalChunks = Math.max(1, Math.ceil(totalBytes / CHUNK_SIZE));
+  const videoType = blob.type || 'video/mp4';
+
   try {
-    const res = await fetch(`/api/cms-video/${encodeURIComponent(storageKey)}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': blob.type || 'video/mp4',
-        'X-Video-Type': blob.type || 'video/mp4',
-        'X-Video-Name': encodeURIComponent(fileName)
-      },
-      body: blob
-    });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, totalBytes);
+      const chunk = blob.slice(start, end, videoType);
+
+      const query = new URLSearchParams({
+        index: String(i),
+        total: String(totalChunks),
+        fileName: encodeURIComponent(fileName),
+        videoType
+      });
+
+      const res = await fetch(
+        `/api/cms-video-chunk/${encodeURIComponent(storageKey)}?${query.toString()}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Video-Type': videoType,
+            'X-Video-Name': encodeURIComponent(fileName)
+          },
+          body: chunk
+        }
+      );
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        throw new Error(`Chunk ${i + 1}/${totalChunks} failed with HTTP ${res.status}`);
+      }
+
       const data = await res.json();
-      if (data && data.videoUrl) {
+      const loadedBytes = end;
+      const loadedMb = (loadedBytes / (1024 * 1024)).toFixed(1);
+      const percent = Math.min(99, Math.round((loadedBytes / totalBytes) * 100));
+      if (onProgress) {
+        onProgress(percent, loadedMb, totalMb);
+      }
+
+      if (data && data.complete && data.videoUrl) {
+        await patchFirestoreVideoSettings(data.videoUrl as string, fileName, 'upload');
         return data.videoUrl as string;
       }
     }
   } catch (err) {
-    console.warn('[videoStorage] Server video upload fallback to local IndexedDB:', err);
+    console.warn('[videoStorage] Chunked server video upload fallback to local IndexedDB:', err);
   }
   return null;
 }
@@ -221,22 +297,20 @@ export async function auditStoredVideos(storageKey: string = UNIFIED_VIDEO_STORA
 }
 
 /**
- * Save a video Blob/File into IndexedDB AND upload to server, locking source mode to 'upload'
+ * Save a video Blob/File into IndexedDB AND upload to server in 4MB chunks, locking source mode to 'upload'
  */
 export async function saveVideoBlob(
   storageKey: string,
   blob: Blob,
-  customName?: string
+  customName?: string,
+  onProgress?: (percent: number, loadedMb: string, totalMb: string) => void
 ): Promise<{ playbackUrl: string; serverUrl: string | null; fileName: string }> {
   const id = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
   const fileName =
     customName || (blob as any).name || `video-${new Date().toISOString().slice(0, 10)}.mp4`;
   const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
 
-  // 1. Upload to backend server so it gets a permanent HTTP streaming URL (/api/cms-video/hero_background_video?v=...)
-  const serverUrl = await uploadVideoToServer('hero_background_video', blob, fileName);
-
-  // 2. Save in IndexedDB for instant 0ms local blob playback
+  // 1. Save in IndexedDB first for instant local blob backup
   const objectUrl = URL.createObjectURL(blob);
   activeBlobUrls.set('hero_background_video', { url: objectUrl, size: blob.size });
   activeBlobUrls.set('featured_attractions_video', { url: objectUrl, size: blob.size });
@@ -248,7 +322,6 @@ export async function saveVideoBlob(
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
 
-      // Store under unified keys and unique library ID
       store.put(blob, 'hero_background_video');
       store.put(blob, 'featured_attractions_video');
       store.put(blob, storageKey);
@@ -261,7 +334,10 @@ export async function saveVideoBlob(
     console.warn('[videoStorage] IndexedDB write warning:', err);
   }
 
-  const effectivePersistentUrl = serverUrl || objectUrl;
+  // 2. Upload in 4MB chunks to backend server so it gets a permanent HTTP streaming URL (/api/cms-video/hero_background_video?v=...)
+  const serverUrl = await uploadVideoToServer('hero_background_video', blob, fileName, onProgress);
+
+  const effectivePersistentUrl = serverUrl || '/api/cms-video/hero_background_video';
 
   try {
     localStorage.setItem('gfk_video_cached_hero_background_video', 'true');
@@ -275,7 +351,7 @@ export async function saveVideoBlob(
   } catch (_e) {}
 
   // Lock source mode to 'upload' so external URLs cannot override the uploaded file
-  setVideoSourceMode('upload', serverUrl || undefined, fileName);
+  setVideoSourceMode('upload', effectivePersistentUrl, fileName);
 
   // Update library list
   const existing = getStoredVideosList(storageKey);
@@ -298,7 +374,7 @@ export async function saveVideoBlob(
     }),
     type: 'file',
     url: serverUrl || objectUrl,
-    serverUrl: serverUrl || undefined,
+    serverUrl: effectivePersistentUrl,
     isActive: true
   };
 
@@ -307,7 +383,7 @@ export async function saveVideoBlob(
 
   return {
     playbackUrl: serverUrl || objectUrl,
-    serverUrl,
+    serverUrl: effectivePersistentUrl,
     fileName
   };
 }
@@ -330,6 +406,8 @@ export async function registerUrlInLibrary(
     localStorage.setItem('gfk_hero_video_url', url);
     localStorage.setItem('gfk_featured_video_url', url);
   } catch (_e) {}
+
+  await patchFirestoreVideoSettings(url, customLabel || '', 'url');
 
   const existing = getStoredVideosList(storageKey);
   const updatedList: StoredVideoItem[] = existing.map((item) => ({
@@ -374,44 +452,178 @@ export async function registerUrlInLibrary(
 
 let isBackgroundSyncingVideo = false;
 
-async function syncIndexedDbBlobToServerIfNeeded(blob: Blob): Promise<void> {
-  if (isBackgroundSyncingVideo || typeof window === 'undefined') return;
+async function fetchCurrentCloudVideoMeta(): Promise<{
+  heroVideoSource?: string;
+  heroVideoFileName?: string;
+  heroVideoUrl?: string;
+} | null> {
+  try {
+    const baseUrl = getFirestoreRestBaseUrl();
+    const apiKey = getActiveFirebaseConfig().apiKey;
+    const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+    const res = await fetch(`${baseUrl}/settings/global${keyQuery}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    const docJson = await res.json();
+    const fields = docJson?.fields;
+    if (!fields) return null;
+    return {
+      heroVideoSource: fields.heroVideoSource?.stringValue,
+      heroVideoFileName: fields.heroVideoFileName?.stringValue,
+      heroVideoUrl: fields.heroVideoUrl?.stringValue
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+
+/**
+ * If this browser's IndexedDB holds an older uploaded video whose filename does NOT match
+ * the active heroVideoFileName in Firebase Firestore, evict the stale local blob immediately
+ * so this browser plays the new cloud/server video instead of its old cached blob.
+ */
+export async function evictStaleLocalVideoIfMismatch(cloudFileName?: string): Promise<boolean> {
+  if (typeof window === 'undefined' || !cloudFileName) return false;
+  try {
+    const localName = localStorage.getItem('gfk_video_name_hero_background_video') || '';
+    if (localName && localName !== cloudFileName) {
+      activeBlobUrls.forEach((val) => {
+        try {
+          URL.revokeObjectURL(val.url);
+        } catch (_e) {}
+      });
+      activeBlobUrls.clear();
+      await deleteVideoBlob('hero_background_video');
+      await deleteVideoBlob('featured_attractions_video');
+      localStorage.setItem('gfk_video_name_hero_background_video', cloudFileName);
+      return true;
+    }
+  } catch (_e) {}
+  return false;
+}
+
+export async function syncIndexedDbBlobToServerIfNeeded(blob: Blob): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  if (isBackgroundSyncingVideo) {
+    return getUploadedServerVideoUrl();
+  }
   isBackgroundSyncingVideo = true;
   try {
-    // Check if the server already has the uploaded video
+    const savedName =
+      localStorage.getItem('gfk_video_name_hero_background_video') || '';
+
+    // 1. Check live Firestore settings/global first so a viewer browser with an old IndexedDB video
+    // NEVER overwrites a newer video uploaded in another browser!
+    const cloudMeta = await fetchCurrentCloudVideoMeta();
+    if (cloudMeta?.heroVideoSource === 'url') {
+      return null;
+    }
+    if (
+      cloudMeta?.heroVideoFileName &&
+      savedName &&
+      savedName !== cloudMeta.heroVideoFileName
+    ) {
+      await evictStaleLocalVideoIfMismatch(cloudMeta.heroVideoFileName);
+      return cloudMeta.heroVideoUrl || '/api/cms-video/hero_background_video';
+    }
+
+    const effectiveName = savedName || cloudMeta?.heroVideoFileName || 'uploaded-hero-video.mp4';
+
+    // 2. Check if the server already has the uploaded video of the exact same size & filename
     const checkRes = await fetch('/api/cms-video/hero_background_video', { method: 'HEAD' });
     if (checkRes.ok) {
-      return;
+      const serverSize = Number(checkRes.headers.get('x-video-size') || 0);
+      let serverFileName = '';
+      try {
+        serverFileName = decodeURIComponent(checkRes.headers.get('x-video-name') || '');
+      } catch (_e) {}
+      const serverVideoUrl =
+        checkRes.headers.get('x-video-url') || '/api/cms-video/hero_background_video';
+      if (
+        serverSize === blob.size &&
+        serverSize > 0 &&
+        (!effectiveName || !serverFileName || serverFileName === effectiveName)
+      ) {
+        localStorage.setItem('gfk_uploaded_server_video_url', serverVideoUrl);
+        if (
+          !cloudMeta?.heroVideoUrl ||
+          !cloudMeta.heroVideoUrl.startsWith('/api/cms-video/')
+        ) {
+          await patchFirestoreVideoSettings(serverVideoUrl, effectiveName, 'upload');
+        }
+        return serverVideoUrl;
+      }
     }
-    // Server does not have the video yet (it was only in this browser's IndexedDB) — push it now so other browsers get it!
-    const savedName = localStorage.getItem('gfk_video_name_hero_background_video') || 'uploaded-hero-video.mp4';
-    const uploadedUrl = await uploadVideoToServer('hero_background_video', blob, savedName);
+
+    // 3. Server does not have this active video yet — upload in 4MB chunks now so all other browsers & preview section get it!
+    const uploadedUrl = await uploadVideoToServer('hero_background_video', blob, effectiveName);
     if (uploadedUrl) {
       localStorage.setItem('gfk_uploaded_server_video_url', uploadedUrl);
       localStorage.setItem('gfk_hero_video_url', uploadedUrl);
       localStorage.setItem('gfk_featured_video_url', uploadedUrl);
+      await patchFirestoreVideoSettings(uploadedUrl, effectiveName, 'upload');
+      return uploadedUrl;
     }
   } catch (_e) {
     // Ignore on static hosts without Express backend
   } finally {
     isBackgroundSyncingVideo = false;
   }
+  return null;
 }
 
 /**
- * Retrieve a stored video Blob from IndexedDB ONLY if source mode is 'upload'
+ * Proactively check if this browser has the active uploaded video in IndexedDB and ensure it is uploaded to the server & Firestore
  */
-export async function loadVideoBlob(key: string = UNIFIED_VIDEO_STORAGE_KEY): Promise<string | null> {
+export async function ensureUploadedVideoSyncedToServer(
+  key: string = UNIFIED_VIDEO_STORAGE_KEY,
+  expectedCloudFileName?: string
+): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    if (expectedCloudFileName) {
+      const evicted = await evictStaleLocalVideoIfMismatch(expectedCloudFileName);
+      if (evicted) {
+        return getUploadedServerVideoUrl() || '/api/cms-video/hero_background_video';
+      }
+    }
+    const db = await openVideoDatabase();
+    const blob: Blob | null = await new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(key);
+      req.onsuccess = (e: any) => {
+        const res = e.target.result;
+        resolve(res instanceof Blob ? res : null);
+      };
+      req.onerror = () => resolve(null);
+    });
+    if (blob) {
+      return await syncIndexedDbBlobToServerIfNeeded(blob);
+    }
+  } catch (_e) {}
+  return getUploadedServerVideoUrl();
+}
+
+/**
+ * Retrieve a stored video Blob from IndexedDB ONLY if source mode is 'upload' and it matches the active cloud file
+ */
+export async function loadVideoBlob(
+  key: string = UNIFIED_VIDEO_STORAGE_KEY,
+  expectedCloudFileName?: string
+): Promise<string | null> {
   if (typeof window === 'undefined') return null;
 
-  // If the admin explicitly switched to URL mode, do not return stale IndexedDB blobs
-  if (getVideoSourceMode() === 'url') {
-    return null;
+  if (expectedCloudFileName) {
+    const evicted = await evictStaleLocalVideoIfMismatch(expectedCloudFileName);
+    if (evicted) {
+      return getUploadedServerVideoUrl() || '/api/cms-video/hero_background_video';
+    }
   }
 
   // Return cached in-memory blob URL immediately if already created in this session
   const cachedMem = activeBlobUrls.get(key);
   if (cachedMem && cachedMem.url) {
+    ensureUploadedVideoSyncedToServer(key, expectedCloudFileName);
     return cachedMem.url;
   }
 
@@ -428,7 +640,6 @@ export async function loadVideoBlob(key: string = UNIFIED_VIDEO_STORAGE_KEY): Pr
       request.onsuccess = (event: any) => {
         const blob = event.target.result;
         if (blob instanceof Blob) {
-          // Ensure the server also has this video so other browsers can stream it immediately
           syncIndexedDbBlobToServerIfNeeded(blob);
 
           const existing = activeBlobUrls.get(key);

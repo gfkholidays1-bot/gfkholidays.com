@@ -255,6 +255,116 @@ async function startServer() {
     return res.json({ ok: true, updatedAt: entry.updatedAt });
   });
 
+  const finalizeUploadedVideo = (key: string, videoPath: string, metaPath: string, contentType: string, rawFileName: string) => {
+    const stat = fs.statSync(videoPath);
+    const version = Date.now();
+    let decodedFileName = rawFileName;
+    try {
+      decodedFileName = decodeURIComponent(rawFileName);
+    } catch (_e) {}
+
+    fs.writeFileSync(
+      metaPath,
+      JSON.stringify({ contentType, fileName: decodedFileName, size: stat.size, updatedAt: version }),
+      'utf-8'
+    );
+
+    // Mirror to public/uploads/${key}.mp4 so static deployments also have the file
+    try {
+      if (!fs.existsSync(PUBLIC_UPLOADS_DIR)) {
+        fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
+      }
+      fs.copyFileSync(videoPath, path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`));
+    } catch (_e) {}
+
+    const videoUrl = `/api/cms-video/${key}?v=${version}`;
+
+    // Automatically update settings collection on server & broadcast via SSE so all browsers immediately play the uploaded video
+    if (store.collections.settings && Array.isArray(store.collections.settings.data) && store.collections.settings.data.length > 0) {
+      store.collections.settings.data = store.collections.settings.data.map((docItem: any) =>
+        docItem.id === 'global'
+          ? {
+              ...docItem,
+              heroVideoUrl: videoUrl,
+              featuredVideoEmbedUrl: videoUrl,
+              heroVideoSource: 'upload',
+              heroVideoFileName: decodedFileName,
+              _updatedAt: version
+            }
+          : docItem
+      );
+      store.collections.settings.updatedAt = version;
+      saveStoreToDisk(store);
+      broadcastUpdate('settings', store.collections.settings);
+    }
+
+    return {
+      ok: true,
+      complete: true,
+      videoUrl,
+      staticUrl: `/uploads/${key}.mp4?v=${version}`,
+      fileName: decodedFileName,
+      size: stat.size,
+      updatedAt: version
+    };
+  };
+
+  // Chunked video upload endpoint (4MB chunks) to bypass Cloud Run's 32MB single-request limit
+  app.post(
+    '/api/cms-video-chunk/:key',
+    express.raw({ type: '*/*', limit: '20mb' }),
+    (req, res) => {
+      try {
+        const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!fs.existsSync(VIDEOS_DIR)) {
+          fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+        }
+        const buf = req.body;
+        if (!Buffer.isBuffer(buf) || buf.length === 0) {
+          return res.status(400).json({ error: 'Empty video chunk buffer' });
+        }
+
+        const chunkIndex = Math.max(0, Number(req.query.index || 0));
+        const totalChunks = Math.max(1, Number(req.query.total || 1));
+        const contentType = String(req.query.videoType || req.headers['x-video-type'] || req.headers['content-type'] || 'video/mp4');
+        const fileName = String(req.query.fileName || req.headers['x-video-name'] || 'uploaded-video.mp4');
+
+        const partPath = path.join(VIDEOS_DIR, `${key}.part`);
+        const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
+        const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
+
+        if (chunkIndex === 0) {
+          fs.writeFileSync(partPath, buf);
+        } else {
+          fs.appendFileSync(partPath, buf);
+        }
+
+        if (chunkIndex < totalChunks - 1) {
+          return res.json({
+            ok: true,
+            complete: false,
+            chunkIndex,
+            totalChunks
+          });
+        }
+
+        // Final chunk received: atomically move .part to .bin and publish
+        if (fs.existsSync(videoPath)) {
+          try {
+            fs.unlinkSync(videoPath);
+          } catch (_e) {}
+        }
+        fs.renameSync(partPath, videoPath);
+
+        const result = finalizeUploadedVideo(key, videoPath, metaPath, contentType, fileName);
+        return res.json(result);
+      } catch (err: any) {
+        console.error('[CMS Video Chunk Upload Error]:', err);
+        return res.status(500).json({ error: err?.message || 'Failed to save video chunk' });
+      }
+    }
+  );
+
   app.post(
     '/api/cms-video/:key',
     express.raw({ type: '*/*', limit: '250mb' }),
@@ -274,44 +384,8 @@ async function startServer() {
         const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
 
         fs.writeFileSync(videoPath, buf);
-        fs.writeFileSync(
-          metaPath,
-          JSON.stringify({ contentType, fileName, size: buf.length, updatedAt: Date.now() }),
-          'utf-8'
-        );
-
-        // Also mirror to public/uploads/${key}.mp4 so GitHub static deployments serve the uploaded video file
-        try {
-          if (!fs.existsSync(PUBLIC_UPLOADS_DIR)) {
-            fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
-          }
-          fs.writeFileSync(path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`), buf);
-        } catch (_e) {}
-
-        const version = Date.now();
-        const videoUrl = `/api/cms-video/${key}?v=${version}`;
-        const decodedFileName = decodeURIComponent(fileName);
-
-        // Automatically update settings collection on server & broadcast via SSE so all other browsers immediately play the uploaded video
-        if (store.collections.settings && Array.isArray(store.collections.settings.data) && store.collections.settings.data.length > 0) {
-          store.collections.settings.data = store.collections.settings.data.map((docItem: any) =>
-            docItem.id === 'global'
-              ? {
-                  ...docItem,
-                  heroVideoUrl: videoUrl,
-                  featuredVideoEmbedUrl: videoUrl,
-                  heroVideoSource: 'upload',
-                  heroVideoFileName: decodedFileName,
-                  _updatedAt: version
-                }
-              : docItem
-          );
-          store.collections.settings.updatedAt = version;
-          saveStoreToDisk(store);
-          broadcastUpdate('settings', store.collections.settings);
-        }
-
-        return res.json({ ok: true, videoUrl, staticUrl: `/uploads/${key}.mp4?v=${version}`, fileName: decodedFileName, size: buf.length });
+        const result = finalizeUploadedVideo(key, videoPath, metaPath, contentType, fileName);
+        return res.json(result);
       } catch (err: any) {
         console.error('[CMS Video Upload Error]:', err);
         return res.status(500).json({ error: err?.message || 'Failed to save video' });
@@ -333,33 +407,113 @@ async function startServer() {
     }
   });
 
-  app.get('/api/cms-video/:key', (req, res) => {
+  const handleStreamVideo = (req: express.Request, res: express.Response) => {
     try {
       const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
-      const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
-      const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
+      const binPath = path.join(VIDEOS_DIR, `${key}.bin`);
+      const fallbackPublicPath = path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`);
+      const videoPath = fs.existsSync(binPath)
+        ? binPath
+        : fs.existsSync(fallbackPublicPath)
+        ? fallbackPublicPath
+        : null;
 
-      if (!fs.existsSync(videoPath)) {
+      if (!videoPath) {
         return res.status(404).json({ error: 'No uploaded video found' });
       }
 
+      const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
+      const stat = fs.statSync(videoPath);
+      const fileSize = stat.size;
+
       let contentType = 'video/mp4';
+      let fileName = `${key}.mp4`;
+      let updatedAt = Math.floor(stat.mtimeMs);
+
       if (fs.existsSync(metaPath)) {
         try {
           const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
           if (meta.contentType && meta.contentType.startsWith('video/')) {
             contentType = meta.contentType;
           }
+          if (meta.fileName) {
+            fileName = meta.fileName;
+          }
+          if (meta.updatedAt) {
+            updatedAt = meta.updatedAt;
+          }
         } catch (_e) {}
       }
 
+      res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Type', contentType);
+      res.setHeader('X-Video-Size', String(fileSize));
+      res.setHeader('X-Video-Name', encodeURIComponent(fileName));
+      res.setHeader('X-Video-Url', `/api/cms-video/${key}?v=${updatedAt}`);
       res.setHeader('Cache-Control', 'public, max-age=3600');
-      return res.sendFile(videoPath);
+
+      if (req.method === 'HEAD') {
+        res.setHeader('Content-Length', String(fileSize));
+        return res.status(200).end();
+      }
+
+      // Cap each response chunk to 8MB so Cloud Run's 32MB HTTP response limit is never exceeded
+      const MAX_STREAM_CHUNK = 8 * 1024 * 1024;
+      const rangeHeader = req.headers.range;
+
+      if (rangeHeader) {
+        const parts = rangeHeader.replace(/bytes=/, '').split('-');
+        const start = Math.max(0, parseInt(parts[0], 10) || 0);
+        if (start >= fileSize) {
+          res.setHeader('Content-Range', `bytes */${fileSize}`);
+          return res.status(416).end();
+        }
+        const requestedEnd = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const end = Math.min(
+          isNaN(requestedEnd) ? fileSize - 1 : requestedEnd,
+          start + MAX_STREAM_CHUNK - 1,
+          fileSize - 1
+        );
+        const chunkLength = end - start + 1;
+
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        res.setHeader('Content-Length', String(chunkLength));
+
+        const stream = fs.createReadStream(videoPath, { start, end });
+        stream.on('error', () => {
+          if (!res.headersSent) res.status(500).end();
+        });
+        return stream.pipe(res);
+      }
+
+      // If no Range header is sent and the video is larger than 20MB, send the first 8MB as 206 Partial Content
+      if (fileSize > 20 * 1024 * 1024) {
+        const end = Math.min(MAX_STREAM_CHUNK - 1, fileSize - 1);
+        const chunkLength = end + 1;
+        res.status(206);
+        res.setHeader('Content-Range', `bytes 0-${end}/${fileSize}`);
+        res.setHeader('Content-Length', String(chunkLength));
+        const stream = fs.createReadStream(videoPath, { start: 0, end });
+        stream.on('error', () => {
+          if (!res.headersSent) res.status(500).end();
+        });
+        return stream.pipe(res);
+      }
+
+      res.setHeader('Content-Length', String(fileSize));
+      const stream = fs.createReadStream(videoPath);
+      stream.on('error', () => {
+        if (!res.headersSent) res.status(500).end();
+      });
+      return stream.pipe(res);
     } catch (err: any) {
       return res.status(500).json({ error: 'Failed to stream video' });
     }
-  });
+  };
+
+  app.head('/api/cms-video/:key', handleStreamVideo);
+  app.get('/api/cms-video/:key', handleStreamVideo);
 
   app.delete('/api/cms-video/:key', (req, res) => {
     try {

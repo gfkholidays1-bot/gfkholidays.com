@@ -4,7 +4,8 @@ import {
   getVideoSourceMode,
   getUploadedServerVideoUrl,
   isDirectVideoSource,
-  isUploadedVideoUrl
+  isUploadedVideoUrl,
+  ensureUploadedVideoSyncedToServer
 } from '../lib/videoStorage';
 import {
   Package,
@@ -112,17 +113,12 @@ export default function MalaysiaHome({
       getVideoSourceMode() === 'upload';
 
     if (isUploadMode) {
-      const serverUpload = getUploadedServerVideoUrl();
-      if (serverUpload) return serverUpload;
       if (isUploadedVideoUrl(settings.heroVideoUrl)) {
         return settings.heroVideoUrl!;
       }
-      try {
-        const cachedHeroUrl = localStorage.getItem('gfk_hero_video_url');
-        if (cachedHeroUrl && !cachedHeroUrl.includes('viddler.com')) {
-          return cachedHeroUrl;
-        }
-      } catch (_e) {}
+      const serverUpload = getUploadedServerVideoUrl();
+      if (serverUpload) return serverUpload;
+      return '/api/cms-video/hero_background_video';
     }
 
     const rawUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
@@ -134,8 +130,7 @@ export default function MalaysiaHome({
 
   const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(resolvePreferredVideoUrl);
 
-  // Load uploaded video from IndexedDB ONLY if we don't already have an active server stream playing,
-  // so we never swap <video src> 2 seconds into playback
+  // Ensure any matching IndexedDB video is synced and stale local blobs are evicted
   useEffect(() => {
     let isMounted = true;
 
@@ -144,13 +139,17 @@ export default function MalaysiaHome({
       isUploadedVideoUrl(settings.heroVideoUrl) ||
       getVideoSourceMode() === 'upload';
 
+    if (isUploadMode) {
+      ensureUploadedVideoSyncedToServer('hero_background_video', settings.heroVideoFileName);
+    }
+
     const alreadyHasUploadStream =
       activeHeroVideoUrl.startsWith('/api/cms-video/') ||
       activeHeroVideoUrl.startsWith('/uploads/') ||
       activeHeroVideoUrl.startsWith('blob:');
 
     if (isUploadMode && !alreadyHasUploadStream) {
-      loadVideoBlob('hero_background_video').then((blobUrl) => {
+      loadVideoBlob('hero_background_video', settings.heroVideoFileName).then((blobUrl) => {
         if (isMounted && blobUrl) {
           setActiveHeroVideoUrl(blobUrl);
         }
@@ -160,7 +159,7 @@ export default function MalaysiaHome({
     const handleVideoUpdated = (event: any) => {
       const { videoUrl, serverUrl } = event.detail || {};
       const nextUrl = serverUrl || videoUrl;
-      if (nextUrl) {
+      if (nextUrl && nextUrl !== activeHeroVideoUrl) {
         setActiveHeroVideoUrl(nextUrl);
       }
     };
@@ -186,32 +185,33 @@ export default function MalaysiaHome({
     }
   }, [activeHeroVideoUrl, heroMuted]);
 
-  // Sync when settings props change from Server/Firestore, respecting upload priority
+  // Sync when settings props change from Server/Firestore so the Preview Section & all browsers stay in instant sync
   useEffect(() => {
     const incomingUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
     if (!incomingUrl) return;
 
-    // If incoming URL is a server-uploaded video (/api/cms-video/... or /uploads/...), apply it unless already playing
-    if (isUploadedVideoUrl(incomingUrl)) {
-      if (!activeHeroVideoUrl.startsWith('blob:') && activeHeroVideoUrl !== incomingUrl) {
-        setActiveHeroVideoUrl(incomingUrl);
+    if (isUploadedVideoUrl(incomingUrl) || settings.heroVideoSource === 'upload') {
+      const targetStreamUrl = isUploadedVideoUrl(incomingUrl)
+        ? incomingUrl
+        : '/api/cms-video/hero_background_video';
+      if (activeHeroVideoUrl !== targetStreamUrl) {
+        setActiveHeroVideoUrl(targetStreamUrl);
       }
       return;
     }
 
-    // CRITICAL: If an uploaded video file is active locally, DO NOT let an external URL override it
-    if (
-      getVideoSourceMode() === 'upload' ||
-      settings.heroVideoSource === 'upload' ||
-      isUploadedVideoUrl(activeHeroVideoUrl)
-    ) {
+    // If Firestore explicitly says 'url', switch to the incoming URL immediately
+    if (settings.heroVideoSource === 'url') {
+      if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeHeroVideoUrl) {
+        setActiveHeroVideoUrl(incomingUrl);
+      }
       return;
     }
 
     if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeHeroVideoUrl) {
       setActiveHeroVideoUrl(incomingUrl);
     }
-  }, [settings.heroVideoUrl, settings.featuredVideoEmbedUrl, settings.heroVideoSource]);
+  }, [settings.heroVideoUrl, settings.featuredVideoEmbedUrl, settings.heroVideoSource, settings.heroVideoFileName]);
 
   // Priority Malaysia Activities & Packages state
   const [activeCatalogTab, setActiveCatalogTab] = useState<'all' | 'packages' | 'tickets' | 'transport'>('all');

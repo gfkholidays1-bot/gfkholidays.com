@@ -8,6 +8,7 @@ import {
   isFirebaseWriteQuotaExceeded,
   setFirebaseWriteQuotaExceeded
 } from '../lib/firebase';
+import { evictStaleLocalVideoIfMismatch } from '../lib/videoStorage';
 
 export enum OperationType {
   CREATE = 'create',
@@ -207,10 +208,31 @@ export function normalizeGlobalSettings(docData: any, defaults: any) {
       })
     : defaults?.otaPartners || [];
 
+  const isUploadSource =
+    docData?.heroVideoSource === 'upload' ||
+    (typeof docData?.heroVideoUrl === 'string' &&
+      (docData.heroVideoUrl.startsWith('/api/cms-video/') ||
+        docData.heroVideoUrl.startsWith('/uploads/')));
+
+  const normalizedHeroVideoUrl = isUploadSource
+    ? typeof docData?.heroVideoUrl === 'string' &&
+      (docData.heroVideoUrl.startsWith('/api/cms-video/') ||
+        docData.heroVideoUrl.startsWith('/uploads/'))
+      ? docData.heroVideoUrl
+      : '/api/cms-video/hero_background_video'
+    : docData?.heroVideoUrl || defaults?.heroVideoUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+
+  const normalizedFeaturedVideoUrl = isUploadSource
+    ? normalizedHeroVideoUrl
+    : docData?.featuredVideoEmbedUrl || normalizedHeroVideoUrl;
+
   return {
     ...defaults,
     ...docData,
     id: 'global',
+    heroVideoSource: isUploadSource ? 'upload' : docData?.heroVideoSource || 'url',
+    heroVideoUrl: normalizedHeroVideoUrl,
+    featuredVideoEmbedUrl: normalizedFeaturedVideoUrl,
     logoUrl:
       docData?.logoUrl && docData.logoUrl !== 'https://iili.io/ChVw1zF.png'
         ? docData.logoUrl
@@ -277,7 +299,7 @@ function subscribeToCmsStream(listener: StreamListener) {
     typeof window !== 'undefined' &&
     typeof EventSource !== 'undefined' &&
     !sharedEventSource &&
-    cmsBackendAvailable === true
+    cmsBackendAvailable !== false
   ) {
     try {
       sharedEventSource = new EventSource('/api/cms-stream');
@@ -488,7 +510,42 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
               if (globalItem.logoHeight !== undefined) {
                 localStorage.setItem('gfk_logo_height', String(globalItem.logoHeight));
               }
+              if (globalItem.logoAlign) {
+                localStorage.setItem('gfk_logo_align', globalItem.logoAlign);
+              }
+              if (globalItem.heroVideoSource === 'upload') {
+                if (globalItem.heroVideoFileName) {
+                  evictStaleLocalVideoIfMismatch(globalItem.heroVideoFileName);
+                  localStorage.setItem('gfk_video_name_hero_background_video', globalItem.heroVideoFileName);
+                }
+                localStorage.setItem('gfk_video_source_mode', 'upload');
+                if (globalItem.heroVideoUrl) {
+                  localStorage.setItem('gfk_uploaded_server_video_url', globalItem.heroVideoUrl);
+                  localStorage.setItem('gfk_hero_video_url', globalItem.heroVideoUrl);
+                  localStorage.setItem('gfk_featured_video_url', globalItem.heroVideoUrl);
+                }
+              } else if (globalItem.heroVideoSource === 'url') {
+                localStorage.setItem('gfk_video_source_mode', 'url');
+                localStorage.removeItem('gfk_uploaded_server_video_url');
+                if (globalItem.heroVideoUrl) {
+                  localStorage.setItem('gfk_hero_video_url', globalItem.heroVideoUrl);
+                  localStorage.setItem('gfk_featured_video_url', globalItem.heroVideoUrl);
+                }
+              }
               window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: globalItem }));
+              if (globalItem.heroVideoUrl) {
+                window.dispatchEvent(
+                  new CustomEvent('gfk-video-updated', {
+                    detail: {
+                      key: 'hero_background_video',
+                      videoUrl: globalItem.heroVideoUrl,
+                      serverUrl: globalItem.heroVideoUrl,
+                      sourceMode: globalItem.heroVideoSource || 'url',
+                      fileName: globalItem.heroVideoFileName || ''
+                    }
+                  })
+                );
+              }
             }
           }
         } catch (_e) {}
@@ -575,14 +632,13 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
       }
     };
 
-    // Periodic lightweight cloud poll for 'settings' so even browsers with strict adblockers blocking WebChannel get live updates
+    // Periodic lightweight cloud poll for 'settings' (every 3s) so the AI Studio preview section and all browsers stay in instant sync
     let pollTimer: any = null;
     if (collectionName === 'settings') {
       pollTimer = setInterval(() => {
         if (
-          document.visibilityState === 'visible' &&
           !isWritingRef.current &&
-          Date.now() - lastLocalWriteAtRef.current >= 4000
+          Date.now() - lastLocalWriteAtRef.current >= 3000
         ) {
           fetchCollectionFromFirestoreRest('settings').then((docs) => {
             if (isMounted && docs && docs.length > 0) {
@@ -590,7 +646,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
             }
           });
         }
-      }, 6000);
+      }, 3000);
     }
 
     window.addEventListener('focus', handleVisibilityOrFocus);

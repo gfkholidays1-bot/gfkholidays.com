@@ -153,7 +153,7 @@ export default function VideoUploaderWithProgress({
         setActiveSourceMode('upload');
         setActiveUrl(currentVideoUrl);
       } else {
-        loadVideoBlob(storageKey).then((savedObjectUrl) => {
+        loadVideoBlob(storageKey, currentVideoFileName).then((savedObjectUrl) => {
           if (!isMounted) return;
           if (savedObjectUrl) {
             setActiveSourceMode('upload');
@@ -165,22 +165,42 @@ export default function VideoUploaderWithProgress({
       setActiveUrl(sanitizeInitialUrl(currentVideoUrl));
     }
 
+    const handleVideoUpdated = (e: any) => {
+      const detail = e.detail;
+      if (!detail) return;
+      const nextUrl = detail.serverUrl || detail.videoUrl;
+      if (nextUrl) {
+        setActiveUrl(nextUrl);
+      }
+      if (detail.sourceMode) {
+        setActiveSourceMode(detail.sourceMode);
+      }
+      if (detail.fileName !== undefined) {
+        setActiveFileName(detail.fileName);
+      }
+    };
+
+    window.addEventListener('gfk-video-updated', handleVideoUpdated);
     refreshLibrary();
     runStorageAudit();
     return () => {
       isMounted = false;
+      window.removeEventListener('gfk-video-updated', handleVideoUpdated);
     };
   }, [storageKey]);
 
-  // Sync external currentVideoUrl ONLY when in 'url' mode or if the incoming URL is a server-uploaded video
+  // Sync external currentVideoUrl whenever it updates from Firestore or Server
   useEffect(() => {
     if (!currentVideoUrl) return;
 
     // If the incoming URL is an uploaded server video (/api/cms-video/... or /uploads/...), always honor it as 'upload'
-    if (isUploadedVideoUrl(currentVideoUrl)) {
+    if (isUploadedVideoUrl(currentVideoUrl) || currentVideoSource === 'upload') {
+      const targetStreamUrl = isUploadedVideoUrl(currentVideoUrl)
+        ? currentVideoUrl
+        : '/api/cms-video/hero_background_video';
       setActiveSourceMode('upload');
-      if (!activeUrl.startsWith('blob:') && activeUrl !== currentVideoUrl) {
-        setActiveUrl(currentVideoUrl);
+      if (activeUrl !== targetStreamUrl) {
+        setActiveUrl(targetStreamUrl);
       }
       if (currentVideoFileName) {
         setActiveFileName(currentVideoFileName);
@@ -188,9 +208,12 @@ export default function VideoUploaderWithProgress({
       return;
     }
 
-    // CRITICAL FIX: If an uploaded video file is active, DO NOT let an external URL overwrite it!
-    const currentMode = getVideoSourceMode();
-    if (currentMode === 'upload' || activeSourceMode === 'upload' || currentVideoSource === 'upload') {
+    if (currentVideoSource === 'url') {
+      setActiveSourceMode('url');
+      if (!currentVideoUrl.startsWith('blob:') && !currentVideoUrl.includes('viddler.com')) {
+        setActiveUrl(currentVideoUrl);
+        setUrlInput(currentVideoUrl);
+      }
       return;
     }
 
@@ -200,10 +223,11 @@ export default function VideoUploaderWithProgress({
     }
   }, [currentVideoUrl, currentVideoSource, currentVideoFileName]);
 
-  // Handle local video file upload with real-time percentage progress
-  const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle local video file upload with real-time chunked server upload progress
+  const handleVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
 
     if (!file.type.startsWith('video/')) {
       showToast('Please select a valid video file (.mp4, .webm, or .mov)');
@@ -218,82 +242,67 @@ export default function VideoUploaderWithProgress({
     });
 
     setIsUploading(true);
-    setUploadProgress(0);
+    setUploadProgress(2);
     setUploadSuccess(false);
-    setUploadStatus(`Preparing to upload ${file.name} (${totalSizeMb} MB)...`);
+    setUploadStatus(`Uploading ${file.name} (${totalSizeMb} MB) to server & Firebase in chunks...`);
 
-    const reader = new FileReader();
+    try {
+      const { playbackUrl, serverUrl, fileName } = await saveVideoBlob(
+        storageKey,
+        file,
+        file.name,
+        (percent, loadedMb, totalMb) => {
+          setUploadProgress(percent);
+          setFileStats({
+            name: file.name,
+            sizeMb: totalMb,
+            loadedMb
+          });
+          setUploadStatus(
+            `Uploading video to server: ${percent}% (${loadedMb} MB of ${totalMb} MB)`
+          );
+        }
+      );
 
-    reader.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = Math.min(95, Math.round((event.loaded / event.total) * 95));
-        const currentLoadedMb = (event.loaded / (1024 * 1024)).toFixed(1);
-        setUploadProgress(percent);
-        setFileStats({
-          name: file.name,
-          sizeMb: totalSizeMb,
-          loadedMb: currentLoadedMb
-        });
-        setUploadStatus(`Reading video file: ${percent}% (${currentLoadedMb} MB of ${totalSizeMb} MB)`);
-      }
-    };
-
-    reader.onload = async () => {
-      setUploadProgress(98);
-      setUploadStatus(`Saving video to server & high-speed storage...`);
-
-      try {
-        const { playbackUrl, serverUrl, fileName } = await saveVideoBlob(storageKey, file, file.name);
-
-        setUploadProgress(100);
-        setActiveSourceMode('upload');
-        setActiveFileName(fileName);
-        setActiveUrl(playbackUrl);
-        // Clear URL input box so URL never conflicts with uploaded file
-        setUrlInput('');
-        setIsUploading(false);
-        setUploadSuccess(true);
-        setUploadStatus(
-          `Uploaded "${fileName}" (100%)! Uploaded video is now priority-locked & playing live on Desktop & Mobile.`
-        );
-        refreshLibrary();
-        runStorageAudit();
-
-        // Broadcast event so homepage hero & mobile video immediately update
-        window.dispatchEvent(
-          new CustomEvent('gfk-video-updated', {
-            detail: {
-              key: 'hero_background_video',
-              videoUrl: playbackUrl,
-              serverUrl,
-              sourceMode: 'upload',
-              fileName
-            }
-          })
-        );
-
-        onVideoApplied(serverUrl || playbackUrl, {
-          sourceMode: 'upload',
-          fileName,
-          serverUrl
-        });
-        showToast(`Video "${fileName}" uploaded (100%) and set as active Hero & Featured video!`);
-      } catch (err: any) {
-        console.error('Failed to save video:', err);
-        setIsUploading(false);
-        setUploadStatus(`Error storing video: ${err?.message || 'Storage error'}`);
-        showToast('Storage error while saving video file.');
-      }
-    };
-
-    reader.onerror = () => {
+      setUploadProgress(100);
+      setActiveSourceMode('upload');
+      setActiveFileName(fileName);
+      setActiveUrl(playbackUrl);
+      // Clear URL input box so URL never conflicts with uploaded file
+      setUrlInput('');
       setIsUploading(false);
-      setUploadStatus(`Upload failed. Please try again or use an MP4 URL.`);
-      showToast('Error reading video file.');
-    };
+      setUploadSuccess(true);
+      setUploadStatus(
+        `Uploaded "${fileName}" (100%)! Synced to Server & Firebase — playing live across all browsers.`
+      );
+      refreshLibrary();
+      runStorageAudit();
 
-    reader.readAsArrayBuffer(file);
-    e.target.value = '';
+      // Broadcast event so homepage hero & mobile video immediately update
+      window.dispatchEvent(
+        new CustomEvent('gfk-video-updated', {
+          detail: {
+            key: 'hero_background_video',
+            videoUrl: playbackUrl,
+            serverUrl,
+            sourceMode: 'upload',
+            fileName
+          }
+        })
+      );
+
+      onVideoApplied(serverUrl || playbackUrl, {
+        sourceMode: 'upload',
+        fileName,
+        serverUrl
+      });
+      showToast(`Video "${fileName}" uploaded (100%) and published live across all browsers!`);
+    } catch (err: any) {
+      console.error('Failed to save video:', err);
+      setIsUploading(false);
+      setUploadStatus(`Error storing video: ${err?.message || 'Storage error'}`);
+      showToast('Storage error while saving video file.');
+    }
   };
 
   // Apply custom URL or preset (explicitly switches priority from Upload to URL)
