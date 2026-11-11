@@ -1,19 +1,11 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import {
-  initializeFirestore,
   getFirestore,
-  memoryLocalCache,
-  setLogLevel as setFirestoreLogLevel
+  doc,
+  getDocFromServer
 } from 'firebase/firestore';
-import { setLogLevel } from 'firebase/app';
 import firebaseConfigFromJson from '../../firebase-applet-config.json';
-
-// Suppress verbose internal SDK warnings while keeping our explicit diagnostic logs clear
-try {
-  setLogLevel('silent');
-  setFirestoreLogLevel('silent');
-} catch (_e) {}
 
 export interface ActiveFirebaseConfig {
   apiKey: string;
@@ -28,13 +20,13 @@ export interface ActiveFirebaseConfig {
 const CUSTOM_FIREBASE_STORAGE_KEY = 'gfk_custom_firebase_config';
 
 const fallbackConfig: ActiveFirebaseConfig = {
-  apiKey: 'AIzaSyD4A1n6GAe81TplBXGgVorN7qowKCBqjvM',
-  authDomain: 'gen-lang-client-0612324688.firebaseapp.com',
-  projectId: 'gen-lang-client-0612324688',
-  storageBucket: 'gen-lang-client-0612324688.firebasestorage.app',
-  messagingSenderId: '1095118801112',
-  appId: '1:1095118801112:web:1dfe10cbf4bfa0cecb6fad',
-  firestoreDatabaseId: 'ai-studio-gfkholidays-415b8c9f-ece5-42b3-82d6-fea966b26d79'
+  apiKey: firebaseConfigFromJson.apiKey,
+  authDomain: firebaseConfigFromJson.authDomain,
+  projectId: firebaseConfigFromJson.projectId,
+  storageBucket: firebaseConfigFromJson.storageBucket,
+  messagingSenderId: firebaseConfigFromJson.messagingSenderId,
+  appId: firebaseConfigFromJson.appId,
+  firestoreDatabaseId: firebaseConfigFromJson.firestoreDatabaseId
 };
 
 function loadCustomFirebaseConfigFromStorage(): Partial<ActiveFirebaseConfig> | null {
@@ -57,7 +49,6 @@ export function isUsingCustomFirebaseConfig(): boolean {
 export function saveCustomFirebaseConfig(configInput: Partial<ActiveFirebaseConfig> | string): ActiveFirebaseConfig {
   let parsed: any = configInput;
   if (typeof configInput === 'string') {
-    // Support pasting either JSON or JS object snippet from Firebase Console
     const cleaned = configInput
       .replace(/const\s+firebaseConfig\s*=\s*/g, '')
       .replace(/;\s*$/, '')
@@ -83,6 +74,11 @@ export function saveCustomFirebaseConfig(configInput: Partial<ActiveFirebaseConf
 
   if (typeof window !== 'undefined') {
     localStorage.setItem(CUSTOM_FIREBASE_STORAGE_KEY, JSON.stringify(normalized));
+    fetch('/api/firebase-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(normalized)
+    }).catch(() => {});
   }
   return normalized;
 }
@@ -90,6 +86,11 @@ export function saveCustomFirebaseConfig(configInput: Partial<ActiveFirebaseConf
 export function clearCustomFirebaseConfig(): void {
   if (typeof window !== 'undefined') {
     localStorage.removeItem(CUSTOM_FIREBASE_STORAGE_KEY);
+    fetch('/api/firebase-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fallbackConfig)
+    }).catch(() => {});
   }
 }
 
@@ -100,37 +101,37 @@ export const firebaseConfig: ActiveFirebaseConfig = {
   apiKey:
     customStored?.apiKey ||
     metaEnv.VITE_FIREBASE_API_KEY ||
-    (firebaseConfigFromJson as any)?.apiKey ||
+    firebaseConfigFromJson.apiKey ||
     fallbackConfig.apiKey,
   authDomain:
     customStored?.authDomain ||
     metaEnv.VITE_FIREBASE_AUTH_DOMAIN ||
-    (firebaseConfigFromJson as any)?.authDomain ||
+    firebaseConfigFromJson.authDomain ||
     fallbackConfig.authDomain,
   projectId:
     customStored?.projectId ||
     metaEnv.VITE_FIREBASE_PROJECT_ID ||
-    (firebaseConfigFromJson as any)?.projectId ||
+    firebaseConfigFromJson.projectId ||
     fallbackConfig.projectId,
   storageBucket:
     customStored?.storageBucket ||
     metaEnv.VITE_FIREBASE_STORAGE_BUCKET ||
-    (firebaseConfigFromJson as any)?.storageBucket ||
+    firebaseConfigFromJson.storageBucket ||
     fallbackConfig.storageBucket,
   messagingSenderId:
     customStored?.messagingSenderId ||
     metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID ||
-    (firebaseConfigFromJson as any)?.messagingSenderId ||
+    firebaseConfigFromJson.messagingSenderId ||
     fallbackConfig.messagingSenderId,
   appId:
     customStored?.appId ||
     metaEnv.VITE_FIREBASE_APP_ID ||
-    (firebaseConfigFromJson as any)?.appId ||
+    firebaseConfigFromJson.appId ||
     fallbackConfig.appId,
   firestoreDatabaseId:
     customStored?.firestoreDatabaseId ||
     metaEnv.VITE_FIREBASE_FIRESTORE_DATABASE_ID ||
-    (firebaseConfigFromJson as any)?.firestoreDatabaseId ||
+    firebaseConfigFromJson.firestoreDatabaseId ||
     fallbackConfig.firestoreDatabaseId
 };
 
@@ -144,46 +145,26 @@ export function getFirestoreRestBaseUrl(): string {
 }
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const firestore = db;
 export const auth = getAuth(app);
 
-// Detect whether we are running inside an iframe (AI Studio preview) or standalone browser (GitHub/Netlify deployment)
-const isInIframe = (() => {
-  if (typeof window === 'undefined') return false;
+// Validate connection to Firestore on boot per firebase-integration-rpc skill
+async function testConnection() {
   try {
-    return window.self !== window.top;
-  } catch (_e) {
-    return true;
-  }
-})();
-
-const databaseId =
-  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-    ? firebaseConfig.firestoreDatabaseId
-    : undefined;
-
-export const firestore = (() => {
-  try {
-    return initializeFirestore(
-      app,
-      {
-        localCache: memoryLocalCache(),
-        ...(isInIframe
-          ? { experimentalForceLongPolling: true }
-          : { experimentalAutoDetectLongPolling: true })
-      },
-      databaseId
-    );
-  } catch (_e) {
-    try {
-      return databaseId ? getFirestore(app, databaseId) : getFirestore(app);
-    } catch (_e2) {
-      return getFirestore(app);
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
     }
   }
-})();
+}
+if (typeof window !== 'undefined') {
+  testConnection();
+}
 
 export const getFirebaseAuth = () => auth;
-export const getFirebaseFirestore = () => firestore;
+export const getFirebaseFirestore = () => db;
 
 export interface FirebaseConnectionCheckResult {
   readOk: boolean;
@@ -192,6 +173,20 @@ export interface FirebaseConnectionCheckResult {
   projectId: string;
   databaseId: string;
   message: string;
+}
+
+let liveWriteQuotaExceeded = false;
+
+export function isFirebaseWriteQuotaExceeded(): boolean {
+  return liveWriteQuotaExceeded;
+}
+
+export function setFirebaseWriteQuotaExceeded(val: boolean): void {
+  liveWriteQuotaExceeded = val;
+}
+
+export function getFirebaseConsoleDatabaseUrl(): string {
+  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`;
 }
 
 export async function testFirebaseConnection(): Promise<FirebaseConnectionCheckResult> {
@@ -218,7 +213,6 @@ export async function testFirebaseConnection(): Promise<FirebaseConnectionCheckR
       return result;
     }
 
-    // Test lightweight metadata ping on _connectionCheck document
     const writeUrl = `${baseUrl}/_diagnostics/ping?updateMask.fieldPaths=lastCheckedAt${apiKeyParam ? `&${apiKeyParam}` : ''}`;
     const writeRes = await fetch(writeUrl, {
       method: 'PATCH',
@@ -232,10 +226,12 @@ export async function testFirebaseConnection(): Promise<FirebaseConnectionCheckR
 
     if (writeRes.ok) {
       result.writeOk = true;
+      liveWriteQuotaExceeded = false;
       result.message = `Connected to Firebase Firestore (${firebaseConfig.projectId}) — Live Read & Write Active`;
     } else if (writeRes.status === 429) {
       result.quotaExceeded = true;
-      result.message = `Firebase Read is Online, but Free-Tier Daily Write Quota (20,000 writes/day) on project "${firebaseConfig.projectId}" is temporarily exhausted (HTTP 429). Quota resets automatically at midnight PT, or you can connect your own Firebase project below.`;
+      liveWriteQuotaExceeded = true;
+      result.message = `Quota exceeded on Firebase project "${firebaseConfig.projectId}" (Free daily write limit of 20,000 writes/day reached — HTTP 429). Quota resets next day at midnight PT, or connect a new Firebase project below.`;
     } else {
       const errText = await writeRes.text();
       result.message = `Write HTTP ${writeRes.status}: ${errText.slice(0, 160)}`;

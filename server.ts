@@ -115,26 +115,24 @@ async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: Collect
 
   let changed = false;
 
-  // Explicitly ensure settings/global is seeded from Firestore if not in store
-  if (!store.collections.settings || !Array.isArray(store.collections.settings.data) || store.collections.settings.data.length === 0) {
-    try {
-      const res = await fetch(`${FIRESTORE_BASE_URL}/settings/global`);
-      if (res.ok) {
-        const docJson: any = await res.json();
-        if (docJson && docJson.fields) {
-          const parsedDoc = parseFirestoreDoc(docJson);
-          parsedDoc.id = 'global';
-          store.collections.settings = {
-            data: [parsedDoc],
-            updatedAt: Number(parsedDoc._updatedAt) || 1,
-          };
-          changed = true;
-          onSeeded?.('settings', store.collections.settings);
-          console.log(`[CMS Store] Seeded 'settings/global' from Firestore`);
-        }
+  // Always sync settings/global from live Firestore on startup so local server cache is never stale
+  try {
+    const res = await fetch(`${FIRESTORE_BASE_URL}/settings/global`);
+    if (res.ok) {
+      const docJson: any = await res.json();
+      if (docJson && docJson.fields) {
+        const parsedDoc = parseFirestoreDoc(docJson);
+        parsedDoc.id = 'global';
+        store.collections.settings = {
+          data: [parsedDoc],
+          updatedAt: Date.now(),
+        };
+        changed = true;
+        onSeeded?.('settings', store.collections.settings);
+        console.log(`[CMS Store] Synced latest 'settings/global' from Firestore`);
       }
-    } catch (_e) {}
-  }
+    }
+  } catch (_e) {}
 
   for (const colName of collectionsToSeed) {
     if (store.collections[colName] && Array.isArray(store.collections[colName].data) && store.collections[colName].data.length > 0) {
@@ -292,13 +290,48 @@ async function startServer() {
 
         const version = Date.now();
         const videoUrl = `/api/cms-video/${key}?v=${version}`;
-        return res.json({ ok: true, videoUrl, staticUrl: `/uploads/${key}.mp4?v=${version}`, fileName, size: buf.length });
+        const decodedFileName = decodeURIComponent(fileName);
+
+        // Automatically update settings collection on server & broadcast via SSE so all other browsers immediately play the uploaded video
+        if (store.collections.settings && Array.isArray(store.collections.settings.data) && store.collections.settings.data.length > 0) {
+          store.collections.settings.data = store.collections.settings.data.map((docItem: any) =>
+            docItem.id === 'global'
+              ? {
+                  ...docItem,
+                  heroVideoUrl: videoUrl,
+                  featuredVideoEmbedUrl: videoUrl,
+                  heroVideoSource: 'upload',
+                  heroVideoFileName: decodedFileName,
+                  _updatedAt: version
+                }
+              : docItem
+          );
+          store.collections.settings.updatedAt = version;
+          saveStoreToDisk(store);
+          broadcastUpdate('settings', store.collections.settings);
+        }
+
+        return res.json({ ok: true, videoUrl, staticUrl: `/uploads/${key}.mp4?v=${version}`, fileName: decodedFileName, size: buf.length });
       } catch (err: any) {
         console.error('[CMS Video Upload Error]:', err);
         return res.status(500).json({ error: err?.message || 'Failed to save video' });
       }
     }
   );
+
+  app.post('/api/firebase-config', (req, res) => {
+    try {
+      const cfg = req.body;
+      if (!cfg || !cfg.projectId || !cfg.apiKey) {
+        return res.status(400).json({ error: 'Invalid Firebase config' });
+      }
+      const configPath = path.join(__dirname, 'firebase-applet-config.json');
+      fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      return res.json({ ok: true, config: cfg });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to save Firebase config' });
+    }
+  });
 
   app.get('/api/cms-video/:key', (req, res) => {
     try {

@@ -4,7 +4,9 @@ import {
   getFirebaseFirestore,
   getFirebaseAuth,
   getFirestoreRestBaseUrl,
-  getActiveFirebaseConfig
+  getActiveFirebaseConfig,
+  isFirebaseWriteQuotaExceeded,
+  setFirebaseWriteQuotaExceeded
 } from '../lib/firebase';
 
 export enum OperationType {
@@ -38,6 +40,9 @@ function emitFirebaseStatus(
   detailMessage?: string
 ) {
   if (typeof window === 'undefined') return;
+  if (status === 'connected' && isFirebaseWriteQuotaExceeded()) {
+    return;
+  }
   try {
     window.dispatchEvent(
       new CustomEvent('gfk-firebase-status', {
@@ -63,6 +68,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     code === 'resource-exhausted'
   ) {
     console.debug(`[Firestore:${path}] Free-tier daily write quota reached (429):`, errMsg);
+    setFirebaseWriteQuotaExceeded(true);
     emitFirebaseStatus(
       'quota_exceeded',
       'Firebase free-tier daily write quota (20,000 writes/day) reached. Resets at midnight PT or connect your own Firebase project.'
@@ -98,7 +104,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.warn('Firestore Warning:', JSON.stringify(errInfo));
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
   if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
     emitFirebaseStatus('error', `Permissions error on ${path}`);
     throw new Error(JSON.stringify(errInfo));
@@ -260,8 +266,6 @@ export function normalizeGlobalSettings(docData: any, defaults: any) {
   };
 }
 
-// Track whether the Express backend (/api/cms) is available on this origin
-// (True in AI Studio or Node server; False on static GitHub Pages / Netlify / Vercel)
 let cmsBackendAvailable: boolean | null = null;
 type StreamListener = (payload: { collection: string; data: any[]; updatedAt: number }) => void;
 const streamListeners = new Set<StreamListener>();
@@ -286,7 +290,6 @@ function subscribeToCmsStream(listener: StreamListener) {
         } catch (_e) {}
       };
       sharedEventSource.onerror = () => {
-        // Close if static host returned HTML instead of event-stream
         if (cmsBackendAvailable === false && sharedEventSource) {
           sharedEventSource.close();
           sharedEventSource = null;
@@ -323,8 +326,7 @@ export async function pushCollectionToServer(collectionName: string, data: any[]
   }
 }
 
-// Direct Firestore REST API reader so browsers on GitHub/Netlify always get live data
-// even if WebChannel is still handshaking or blocked by browser extensions
+// Direct Firestore REST API reader so all browsers immediately fetch live cloud state
 async function fetchCollectionFromFirestoreRest(collectionName: string): Promise<any[] | null> {
   try {
     const baseUrl = getFirestoreRestBaseUrl();
@@ -409,46 +411,8 @@ function stripTimestampMeta(item: any): any {
   if (!item || typeof item !== 'object') return item;
   const copy = { ...item };
   delete copy._updatedAt;
+  delete copy._testPing;
   return copy;
-}
-
-function getLocalUpdatedAt(collectionName: string): number {
-  if (typeof window === 'undefined') return 0;
-  try {
-    return Number(localStorage.getItem(`gfk_updated_at_${collectionName}`)) || 0;
-  } catch (_e) {
-    return 0;
-  }
-}
-
-function getMaxItemUpdatedAt(items: any[]): number {
-  if (!Array.isArray(items) || items.length === 0) return 0;
-  let maxTs = 0;
-  for (const item of items) {
-    const ts = Number(item?._updatedAt) || 0;
-    if (ts > maxTs) maxTs = ts;
-  }
-  return maxTs;
-}
-
-function isQuotaUnsynced(collectionName: string): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    return localStorage.getItem(`gfk_quota_unsynced_${collectionName}`) === 'true';
-  } catch (_e) {
-    return false;
-  }
-}
-
-function setQuotaUnsynced(collectionName: string, unsynced: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (unsynced) {
-      localStorage.setItem(`gfk_quota_unsynced_${collectionName}`, 'true');
-    } else {
-      localStorage.removeItem(`gfk_quota_unsynced_${collectionName}`);
-    }
-  } catch (_e) {}
 }
 
 export function useFirestoreCollection<T extends { id: string }>(collectionName: string, initialData: T[]) {
@@ -457,6 +421,9 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
   const [data, setData] = useState<T[]>(() => {
     if (typeof window !== 'undefined') {
       try {
+        // Clean up any legacy quota-unsynced flags that previously blocked cross-browser sync
+        localStorage.removeItem(`gfk_quota_unsynced_${collectionName}`);
+
         const cached = localStorage.getItem(`gfk_cache_${collectionName}`);
         if (cached) {
           const parsed = JSON.parse(cached);
@@ -472,8 +439,6 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
   const dataRef = useRef<T[]>(data);
   const isWritingRef = useRef<boolean>(false);
   const lastLocalWriteAtRef = useRef<number>(0);
-  // Protects unsaved local changes across reloads & tabs if Firestore free-tier daily write quota (429) is exhausted
-  const hasUnsyncedLocalQuotaWriteRef = useRef<boolean>(isQuotaUnsynced(collectionName));
 
   const normalizeItems = useCallback(
     (rawItems: any[]): T[] => {
@@ -489,7 +454,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
   );
 
   const applyIncomingState = useCallback(
-    (rawItems: any[], source: string, incomingUpdatedAt?: number) => {
+    (rawItems: any[], source: string) => {
       if (!Array.isArray(rawItems) || rawItems.length === 0) return;
 
       const normalized = normalizeItems(rawItems);
@@ -513,10 +478,6 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem(`gfk_cache_${collectionName}`, JSON.stringify(normalized));
-          const effectiveTs = incomingUpdatedAt || getMaxItemUpdatedAt(normalized);
-          if (effectiveTs > 0) {
-            localStorage.setItem(`gfk_updated_at_${collectionName}`, String(effectiveTs));
-          }
           if (collectionName === 'settings') {
             const globalItem = (normalized as any[]).find((i: any) => i.id === 'global');
             if (globalItem) {
@@ -536,13 +497,23 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
     [collectionName, normalizeItems]
   );
 
-  // 1. Sync with Express CMS API (when in AI Studio) OR Firestore REST API + /cms-seed.json (when deployed on GitHub/Netlify)
+  // 1. Primary Cloud Sync: Fetch directly from Firebase Firestore first across all browsers, with Express SSE & static seed support
   useEffect(() => {
     if (typeof window === 'undefined') return;
     let isMounted = true;
 
     const syncInitialAndFocus = async () => {
-      // A) Try local/container Express backend if not already known to be absent
+      if (isWritingRef.current || Date.now() - lastLocalWriteAtRef.current < 3500) {
+        return;
+      }
+
+      // A) Fetch live from Firebase Firestore REST API first so all browsers share the exact same cloud state
+      const restDocs = await fetchCollectionFromFirestoreRest(collectionName);
+      if (isMounted && restDocs && restDocs.length > 0) {
+        applyIncomingState(restDocs, 'firestore-rest');
+      }
+
+      // B) Also connect to Express backend SSE stream if running in AI Studio / Node server
       if (cmsBackendAvailable !== false) {
         try {
           const res = await fetch(`/api/cms/${collectionName}`, { cache: 'no-store' });
@@ -550,21 +521,22 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
           if (res.ok && contentType.includes('application/json')) {
             cmsBackendAvailable = true;
             const payload = await res.json();
-            if (isMounted && payload && Array.isArray(payload.data) && payload.data.length > 0) {
-              const serverTs = Number(payload.updatedAt) || getMaxItemUpdatedAt(payload.data);
-              const localTs = getLocalUpdatedAt(collectionName);
-              // Only apply server payload if it is not older than a very recent local write
-              if (serverTs >= localTs || localTs === 0) {
-                applyIncomingState(payload.data, 'server-api', serverTs);
-              }
-              // Ensure SSE stream is connected once we know backend exists
-              subscribeToCmsStream((msg) => {
-                if (msg.collection === collectionName && Array.isArray(msg.data)) {
-                  applyIncomingState(msg.data, 'sse-stream', msg.updatedAt);
-                }
-              });
-              return;
+            // Only fall back to server payload if Firestore had no documents
+            if (
+              isMounted &&
+              (!restDocs || restDocs.length === 0) &&
+              payload &&
+              Array.isArray(payload.data) &&
+              payload.data.length > 0
+            ) {
+              applyIncomingState(payload.data, 'server-api');
             }
+            subscribeToCmsStream((msg) => {
+              if (msg.collection === collectionName && Array.isArray(msg.data)) {
+                applyIncomingState(msg.data, 'sse-stream');
+              }
+            });
+            return;
           } else {
             cmsBackendAvailable = false;
           }
@@ -573,25 +545,8 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
         }
       }
 
-      // B) Direct Firestore REST API fetch (works on GitHub Pages, Netlify, Vercel, and all browsers)
-      if (!isWritingRef.current && !hasUnsyncedLocalQuotaWriteRef.current && !isQuotaUnsynced(collectionName)) {
-        const restDocs = await fetchCollectionFromFirestoreRest(collectionName);
-        if (isMounted && restDocs && restDocs.length > 0) {
-          const remoteTs = getMaxItemUpdatedAt(restDocs);
-          const localTs = getLocalUpdatedAt(collectionName);
-          if (localTs === 0 || remoteTs >= localTs) {
-            applyIncomingState(restDocs, 'firestore-rest', remoteTs);
-            return;
-          } else {
-            console.debug(
-              `[useFirestoreCollection:${collectionName}] Skipping stale Firestore REST data (remoteTs=${remoteTs} < localTs=${localTs})`
-            );
-          }
-        }
-      }
-
-      // C) Static build seed fallback (/cms-seed.json bundled in dist/) if no local cache exists yet
-      if (!localStorage.getItem(`gfk_cache_${collectionName}`)) {
+      // C) Static build seed fallback (/cms-seed.json) if both Firestore and local cache are empty
+      if ((!restDocs || restDocs.length === 0) && !localStorage.getItem(`gfk_cache_${collectionName}`)) {
         try {
           const seedRes = await fetch('/cms-seed.json', { cache: 'no-store' });
           const seedType = seedRes.headers.get('content-type') || '';
@@ -599,7 +554,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
             const seedJson = await seedRes.json();
             const colEntry = seedJson?.collections?.[collectionName];
             if (isMounted && colEntry && Array.isArray(colEntry.data) && colEntry.data.length > 0) {
-              applyIncomingState(colEntry.data, 'static-seed', Number(colEntry.updatedAt) || 0);
+              applyIncomingState(colEntry.data, 'static-seed');
             }
           }
         } catch (_e) {}
@@ -610,7 +565,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
 
     const unsubscribeStream = subscribeToCmsStream((msg) => {
       if (msg.collection === collectionName && Array.isArray(msg.data)) {
-        applyIncomingState(msg.data, 'sse-stream', msg.updatedAt);
+        applyIncomingState(msg.data, 'sse-stream');
       }
     });
 
@@ -620,11 +575,30 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
       }
     };
 
+    // Periodic lightweight cloud poll for 'settings' so even browsers with strict adblockers blocking WebChannel get live updates
+    let pollTimer: any = null;
+    if (collectionName === 'settings') {
+      pollTimer = setInterval(() => {
+        if (
+          document.visibilityState === 'visible' &&
+          !isWritingRef.current &&
+          Date.now() - lastLocalWriteAtRef.current >= 4000
+        ) {
+          fetchCollectionFromFirestoreRest('settings').then((docs) => {
+            if (isMounted && docs && docs.length > 0) {
+              applyIncomingState(docs, 'firestore-poll');
+            }
+          });
+        }
+      }, 6000);
+    }
+
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
     return () => {
       isMounted = false;
+      if (pollTimer) clearInterval(pollTimer);
       unsubscribeStream();
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
@@ -644,7 +618,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
           applyIncomingState(event.data, 'broadcast-channel');
         } else if (event.data && Array.isArray(event.data.items)) {
           lastLocalWriteAtRef.current = Date.now();
-          applyIncomingState(event.data.items, 'broadcast-channel', event.data.updatedAt);
+          applyIncomingState(event.data.items, 'broadcast-channel');
         }
       };
     }
@@ -669,7 +643,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
     };
   }, [collectionName, applyIncomingState]);
 
-  // 3. Real-time Firestore Snapshot Listener (works across all browsers & devices when deployed to GitHub)
+  // 3. Real-time Firestore Snapshot Listener across all browsers & sessions
   useEffect(() => {
     const db = getFirebaseFirestore();
     const colRef = collection(db, collectionName);
@@ -682,7 +656,6 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
         const fromCache = snapshot.metadata.fromCache;
         const hasPendingWrites = snapshot.metadata.hasPendingWrites;
         const msSinceLocalWrite = Date.now() - lastLocalWriteAtRef.current;
-        const quotaUnsynced = hasUnsyncedLocalQuotaWriteRef.current || isQuotaUnsynced(collectionName);
 
         console.debug(
           `[useFirestoreCollection:${collectionName}] Snapshot event:`,
@@ -692,9 +665,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
             fromCache,
             hasPendingWrites,
             isWriting: isWritingRef.current,
-            msSinceLocalWrite,
-            quotaUnsynced,
-            cmsBackendAvailable
+            msSinceLocalWrite
           }
         );
 
@@ -705,15 +676,14 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
           return;
         }
 
-        // Prevent revert-cycles during in-flight writes or when Firestore write failed due to 429 quota
+        // Only skip if this specific tab is currently executing a write or receiving an offline cached snapshot
         if (
           isWritingRef.current ||
-          msSinceLocalWrite < 6000 ||
-          quotaUnsynced ||
+          msSinceLocalWrite < 3500 ||
           (fromCache && !hasPendingWrites)
         ) {
           console.debug(
-            `[useFirestoreCollection:${collectionName}] Skipping stale/in-flight snapshot to prevent 2-second revert-cycle`
+            `[useFirestoreCollection:${collectionName}] Skipping in-flight/cached snapshot`
           );
           return;
         }
@@ -725,28 +695,8 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
         });
 
         if (rawItems.length > 0) {
-          const remoteTs = getMaxItemUpdatedAt(rawItems);
-          const localTs = Math.max(
-            getLocalUpdatedAt(collectionName),
-            getMaxItemUpdatedAt(dataRef.current)
-          );
-
-          // CRITICAL: Never allow an older Firestore snapshot (which arrives ~2 seconds after page load)
-          // to overwrite newer data already loaded from localStorage or the Express CMS server!
-          if (localTs > 0 && remoteTs < localTs) {
-            console.debug(
-              `[useFirestoreCollection:${collectionName}] Ignoring older Firestore snapshot (remoteTs=${remoteTs} < localTs=${localTs}) to prevent 2s revert`
-            );
-            return;
-          }
-
-          // When Express backend (/api/cms) is active, only accept Firestore snapshot if it has a strictly newer timestamp
-          if (cmsBackendAvailable === true && remoteTs <= localTs && localTs > 0) {
-            return;
-          }
-
           emitFirebaseStatus('connected', 'Live real-time sync active');
-          applyIncomingState(rawItems, 'firestore-snapshot', remoteTs);
+          applyIncomingState(rawItems, 'firestore-snapshot');
         }
       },
       (err) => {
@@ -787,7 +737,6 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
         return item;
       });
 
-      // Ensure for settings collection that global doc is always included if updateCollection was explicitly called
       if (collectionName === 'settings' && changedItems.length === 0 && stampedData.length > 0) {
         const globalDoc = { ...stampedData[0], _updatedAt: now };
         changedItems.push(globalDoc);
@@ -833,7 +782,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
       // 3. Persist to Express backend CMS server if available (/api/cms/:collection)
       await pushCollectionToServer(collectionName, normalizedNext, now);
 
-      // 4. Write ONLY changed documents to Firebase Firestore (saves 95%+ of daily write quota!)
+      // 4. Write changed documents to Firebase Firestore (both REST PATCH and SDK writeBatch for deletions)
       const newIds = new Set(normalizedNext.map((item: T) => item.id));
       const deletedIds = currentData.filter((item) => !newIds.has(item.id)).map((item) => item.id);
 
@@ -843,12 +792,10 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
       }
 
       try {
-        // Attempt direct REST PATCH first for immediate HTTP status verification (works in all browsers & GitHub deployments)
         const restResult = await writeDocsToFirestoreRest(collectionName, changedItems);
 
         if (restResult.ok && deletedIds.length === 0) {
-          hasUnsyncedLocalQuotaWriteRef.current = false;
-          setQuotaUnsynced(collectionName, false);
+          setFirebaseWriteQuotaExceeded(false);
           lastLocalWriteAtRef.current = Date.now();
           isWritingRef.current = false;
           emitFirebaseStatus('synced', `Saved ${changedItems.length} item(s) to Firebase Firestore`);
@@ -859,17 +806,16 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
         }
 
         if (restResult.quotaExceeded) {
-          hasUnsyncedLocalQuotaWriteRef.current = true;
-          setQuotaUnsynced(collectionName, true);
+          setFirebaseWriteQuotaExceeded(true);
           isWritingRef.current = false;
           emitFirebaseStatus(
             'quota_exceeded',
-            `Firebase project "${getActiveFirebaseConfig().projectId}" free daily write limit (20k writes/day) reached (HTTP 429).`
+            `Quota exceeded on Firebase project "${getActiveFirebaseConfig().projectId}" (20,000 free writes/day limit reached — HTTP 429).`
           );
           return;
         }
 
-        // Fallback to Firebase JS SDK writeBatch (handles deletions and authenticated rules)
+        // Fallback to Firebase JS SDK writeBatch
         const db = getFirebaseFirestore();
         const batch = writeBatch(db);
 
@@ -888,8 +834,7 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
 
         await Promise.race([
           batch.commit().then(() => {
-            hasUnsyncedLocalQuotaWriteRef.current = false;
-            setQuotaUnsynced(collectionName, false);
+            setFirebaseWriteQuotaExceeded(false);
             lastLocalWriteAtRef.current = Date.now();
             emitFirebaseStatus('synced', `Synced to Firebase Firestore`);
             console.debug(`[useFirestoreCollection:${collectionName}] Batch write committed to Firestore`);
@@ -899,8 +844,6 @@ export function useFirestoreCollection<T extends { id: string }>(collectionName:
           )
         ]);
       } catch (err) {
-        hasUnsyncedLocalQuotaWriteRef.current = true;
-        setQuotaUnsynced(collectionName, true);
         handleFirestoreError(err, OperationType.WRITE, collectionName);
       } finally {
         isWritingRef.current = false;

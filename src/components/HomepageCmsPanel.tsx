@@ -7,6 +7,8 @@ import {
   saveCustomFirebaseConfig,
   clearCustomFirebaseConfig,
   testFirebaseConnection,
+  isFirebaseWriteQuotaExceeded,
+  getFirebaseConsoleDatabaseUrl,
   FirebaseConnectionCheckResult
 } from '../lib/firebase';
 import {
@@ -173,13 +175,33 @@ export default function HomepageCmsPanel({
   const debounceTimerRef = useRef<any>(null);
 
   useEffect(() => {
+    let mounted = true;
+    // Automatically verify live Firebase read AND write status on mount so we never show a false green "Connected" badge
+    testFirebaseConnection().then((res) => {
+      if (!mounted) return;
+      setFirebaseTestResult(res);
+      if (res.quotaExceeded) {
+        setSyncStatus('quota_warning');
+        setSyncErrorMsg(res.message);
+      } else if (res.writeOk) {
+        setSyncStatus('saved');
+        setSyncErrorMsg(null);
+      } else if (!res.readOk) {
+        setSyncStatus('error');
+        setSyncErrorMsg(res.message);
+      }
+    });
+
     const handleFirebaseStatus = (e: any) => {
       const detail = e.detail;
       if (!detail) return;
       if (detail.status === 'quota_exceeded') {
         setSyncStatus('quota_warning');
         setSyncErrorMsg(detail.message || 'Firebase free-tier daily write quota reached (429)');
-      } else if (detail.status === 'synced' || detail.status === 'connected') {
+      } else if (detail.status === 'synced') {
+        setSyncStatus('saved');
+        setSyncErrorMsg(null);
+      } else if (detail.status === 'connected' && !isFirebaseWriteQuotaExceeded()) {
         setSyncStatus('saved');
         setSyncErrorMsg(null);
       } else if (detail.status === 'error') {
@@ -188,7 +210,10 @@ export default function HomepageCmsPanel({
       }
     };
     window.addEventListener('gfk-firebase-status', handleFirebaseStatus);
-    return () => window.removeEventListener('gfk-firebase-status', handleFirebaseStatus);
+    return () => {
+      mounted = false;
+      window.removeEventListener('gfk-firebase-status', handleFirebaseStatus);
+    };
   }, []);
 
   // Sync when settings prop updates from Firestore initially or externally
@@ -295,15 +320,26 @@ export default function HomepageCmsPanel({
         new Promise<void>((resolve) => setTimeout(resolve, 6000))
       ]);
 
-      setSyncStatus('saved');
       setLastSavedTime(new Date().toLocaleTimeString());
-      if (toastMessage) {
-        showToast(toastMessage);
+      if (isFirebaseWriteQuotaExceeded()) {
+        setSyncStatus('quota_warning');
+        if (toastMessage) {
+          showToast(`${toastMessage} (Synced to Server; Firebase Cloud Write Quota 429 Reached)`);
+        }
+      } else {
+        setSyncStatus('saved');
+        if (toastMessage) {
+          showToast(toastMessage);
+        }
       }
     } catch (err: any) {
       console.debug('[HomepageCmsPanel] Non-fatal save warning:', err);
-      setSyncStatus('saved');
       setLastSavedTime(new Date().toLocaleTimeString());
+      if (isFirebaseWriteQuotaExceeded()) {
+        setSyncStatus('quota_warning');
+      } else {
+        setSyncStatus('saved');
+      }
       if (toastMessage) {
         showToast(toastMessage);
       }
@@ -592,13 +628,32 @@ export default function HomepageCmsPanel({
             )}
 
             {syncStatus === 'quota_warning' && (
-              <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3 text-amber-900 space-y-1">
-                <p className="font-bold">
-                  Why did a change on the GitHub-deployed site not save to Firebase right now?
+              <div className="bg-amber-50/90 border border-amber-300 rounded-xl p-3.5 text-amber-950 space-y-2">
+                <p className="font-black text-xs flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                  Why changes on a static GitHub deployment aren&apos;t writing to Firebase right now (HTTP 429 Quota Exceeded):
                 </p>
-                <p className="text-amber-800 leading-relaxed">
-                  The default free-tier Firebase project (<code>{getActiveFirebaseConfig().projectId}</code>) has a Google Cloud limit of 20,000 free writes per day and is currently returning <code>HTTP 429 (Quota limit exceeded)</code>. We have optimized writes by 95% (diff-only writes) and baked your current logo and settings into <code>public/cms-seed.json</code> for GitHub builds. The free daily quota resets automatically at midnight Pacific Time, OR you can paste your own Firebase config below for unlimited writes.
+                <p className="text-amber-900 leading-relaxed">
+                  Google Cloud&apos;s free-tier database on project <code>{getActiveFirebaseConfig().projectId}</code> (<code>{getActiveFirebaseConfig().firestoreDatabaseId}</code>) has reached its <strong>20,000 free writes/day limit</strong> and is returning <code>HTTP 429: Quota exceeded for quota metric &apos;Free daily write units per project&apos;</code>.
+                  In AI Studio, all browsers automatically sync through our live Express server (<code>/api/cms</code>), while on static GitHub Pages there is no Express server so cross-browser sync depends on Firebase Firestore writes.
                 </p>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <a
+                    href={getFirebaseConsoleDatabaseUrl()}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-white px-3 py-1.5 rounded-lg font-bold text-xs"
+                  >
+                    <span>View Database Quota in Firebase Console</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setShowFirebaseConfigDrawer(true)}
+                    className="inline-flex items-center gap-1.5 bg-white hover:bg-amber-100 text-amber-950 border border-amber-400 px-3 py-1.5 rounded-lg font-bold text-xs cursor-pointer"
+                  >
+                    <span>Connect Fresh Firebase Project Config</span>
+                  </button>
+                </div>
               </div>
             )}
 

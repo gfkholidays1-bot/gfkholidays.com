@@ -372,6 +372,32 @@ export async function registerUrlInLibrary(
   saveStoredVideosList(storageKey, updatedList);
 }
 
+let isBackgroundSyncingVideo = false;
+
+async function syncIndexedDbBlobToServerIfNeeded(blob: Blob): Promise<void> {
+  if (isBackgroundSyncingVideo || typeof window === 'undefined') return;
+  isBackgroundSyncingVideo = true;
+  try {
+    // Check if the server already has the uploaded video
+    const checkRes = await fetch('/api/cms-video/hero_background_video', { method: 'HEAD' });
+    if (checkRes.ok) {
+      return;
+    }
+    // Server does not have the video yet (it was only in this browser's IndexedDB) — push it now so other browsers get it!
+    const savedName = localStorage.getItem('gfk_video_name_hero_background_video') || 'uploaded-hero-video.mp4';
+    const uploadedUrl = await uploadVideoToServer('hero_background_video', blob, savedName);
+    if (uploadedUrl) {
+      localStorage.setItem('gfk_uploaded_server_video_url', uploadedUrl);
+      localStorage.setItem('gfk_hero_video_url', uploadedUrl);
+      localStorage.setItem('gfk_featured_video_url', uploadedUrl);
+    }
+  } catch (_e) {
+    // Ignore on static hosts without Express backend
+  } finally {
+    isBackgroundSyncingVideo = false;
+  }
+}
+
 /**
  * Retrieve a stored video Blob from IndexedDB ONLY if source mode is 'upload'
  */
@@ -402,6 +428,9 @@ export async function loadVideoBlob(key: string = UNIFIED_VIDEO_STORAGE_KEY): Pr
       request.onsuccess = (event: any) => {
         const blob = event.target.result;
         if (blob instanceof Blob) {
+          // Ensure the server also has this video so other browsers can stream it immediately
+          syncIndexedDbBlobToServerIfNeeded(blob);
+
           const existing = activeBlobUrls.get(key);
           if (existing && existing.size === blob.size) {
             resolve(existing.url);
