@@ -11,9 +11,31 @@ const DATA_DIR = path.join(__dirname, 'data');
 const VIDEOS_DIR = path.join(DATA_DIR, 'videos');
 const STORE_FILE = path.join(DATA_DIR, 'cms-store.json');
 
-const FIRESTORE_PROJECT_ID = 'gen-lang-client-0612324688';
-const FIRESTORE_DB_ID = 'ai-studio-gfkholidays-415b8c9f-ece5-42b3-82d6-fea966b26d79';
-const FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/${FIRESTORE_DB_ID}/documents`;
+const CONFIG_FILE = path.join(__dirname, 'firebase-applet-config.json');
+function getServerFirebaseConfig(): { projectId: string; databaseId: string; apiKey: string } {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+    return {
+      projectId: raw.projectId || 'gen-lang-client-0612324688',
+      databaseId: raw.firestoreDatabaseId || 'ai-studio-gfkholidays-415b8c9f-ece5-42b3-82d6-fea966b26d79',
+      apiKey: raw.apiKey || ''
+    };
+  } catch (_e) {
+    return {
+      projectId: 'gen-lang-client-0612324688',
+      databaseId: 'ai-studio-gfkholidays-415b8c9f-ece5-42b3-82d6-fea966b26d79',
+      apiKey: ''
+    };
+  }
+}
+
+function getFirestoreBaseUrl(): { baseUrl: string; apiKey: string } {
+  const cfg = getServerFirebaseConfig();
+  return {
+    baseUrl: `https://firestore.googleapis.com/v1/projects/${cfg.projectId}/databases/${encodeURIComponent(cfg.databaseId)}/documents`,
+    apiKey: cfg.apiKey
+  };
+}
 
 let serverReadQuotaExceeded = false;
 
@@ -63,15 +85,14 @@ function parseFirestoreDoc(docObj: any): any {
   return out;
 }
 
-/**
- * Reads a single Firestore document on the server.
- * Automatically falls back to `PATCH ?updateMask.fieldPaths=_noop` when GET returns 429 (50k daily read quota).
- */
 async function fetchFirestoreDocOnServer(collectionName: string, docId: string): Promise<any | null> {
-  const docUrl = `${FIRESTORE_BASE_URL}/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
+  const { baseUrl, apiKey } = getFirestoreBaseUrl();
+  const docUrl = `${baseUrl}/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
+  const keyParam = apiKey ? `key=${encodeURIComponent(apiKey)}` : '';
+
   if (!serverReadQuotaExceeded) {
     try {
-      const res = await fetch(docUrl);
+      const res = await fetch(`${docUrl}${keyParam ? `?${keyParam}` : ''}`);
       if (res.ok) return await res.json();
       if (res.status === 404) return null;
       if (res.status === 429) {
@@ -81,16 +102,44 @@ async function fetchFirestoreDocOnServer(collectionName: string, docId: string):
   }
 
   try {
-    const patchRes = await fetch(`${docUrl}?updateMask.fieldPaths=_noop`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields: {} })
-    });
+    const patchRes = await fetch(
+      `${docUrl}?updateMask.fieldPaths=_noop${keyParam ? `&${keyParam}` : ''}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: {} })
+      }
+    );
     if (patchRes.ok) {
       return await patchRes.json();
     }
   } catch (_e) {}
   return null;
+}
+
+async function runQueryCollectionOnServer(collectionName: string, limit = 200): Promise<any[] | null> {
+  const { baseUrl, apiKey } = getFirestoreBaseUrl();
+  const keyParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+  try {
+    const res = await fetch(`${baseUrl}:runQuery${keyParam}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: collectionName }],
+          limit
+        }
+      })
+    });
+    if (!res.ok) return null;
+    const rows: any = await res.json();
+    if (!Array.isArray(rows)) return null;
+    return rows
+      .map((r: any) => (r?.document ? parseFirestoreDoc(r.document) : null))
+      .filter((d: any) => d && d.id && !String(d.id).startsWith('_sync_probe'));
+  } catch (_e) {
+    return null;
+  }
 }
 
 function loadStoreFromDisk(): CmsStore {
@@ -131,13 +180,11 @@ function saveStoreToDisk(store: CmsStore) {
 
 const store: CmsStore = loadStoreFromDisk();
 
-/**
- * Reconciles the local server video file (`/data/videos/hero_background_video.bin`) with the active
- * `heroVideoFileName` in Firebase Firestore `settings/global` and `cms_video_chunks`.
- * Evicts any stale local video (e.g., an older file whose name no longer matches Firestore) and
- * downloads the active video chunks from Firestore if available.
- */
-async function syncServerVideoWithFirestore(expectedFileName?: string) {
+async function syncServerVideoWithFirestore(expectedFileName?: string, cloudUrl?: string) {
+  // Never replace universal HTTPS Storage/CDN URLs with local disk files
+  if (cloudUrl && (cloudUrl.startsWith('https://') || cloudUrl.startsWith('http://'))) {
+    return;
+  }
   if (!expectedFileName) return;
   try {
     const key = 'hero_background_video';
@@ -153,12 +200,10 @@ async function syncServerVideoWithFirestore(expectedFileName?: string) {
       } catch (_e) {}
     }
 
-    // If local server already has the exact matching video file, nothing to do
     if (localFileName === expectedFileName && fs.existsSync(videoPath)) {
       return;
     }
 
-    // Remove stale local video file if its name does not match Firestore's active heroVideoFileName
     if (localFileName && localFileName !== expectedFileName) {
       console.log(
         `[CMS Video Sync] Evicting stale local server video "${localFileName}" (active Firestore video is "${expectedFileName}")`
@@ -168,7 +213,6 @@ async function syncServerVideoWithFirestore(expectedFileName?: string) {
       if (fs.existsSync(publicUploadPath)) fs.unlinkSync(publicUploadPath);
     }
 
-    // Attempt to pull the active video chunks from Firestore `cms_video_chunks`
     const chunkMetaDoc = await fetchFirestoreDocOnServer('cms_video_chunks', `${key}_meta`);
     const metaFields = chunkMetaDoc?.fields;
     if (!metaFields) return;
@@ -178,11 +222,11 @@ async function syncServerVideoWithFirestore(expectedFileName?: string) {
     const contentType = String(metaFields.mimeType?.stringValue || 'video/mp4');
     const updatedAt = Number(metaFields.version?.integerValue || Date.now());
 
-    if (totalChunks <= 0 || totalChunks > 200) return;
+    if (totalChunks <= 0 || totalChunks > 220) return;
     if (cloudFileName !== expectedFileName) return;
 
     const buffers: Buffer[] = new Array(totalChunks);
-    const BATCH = 5;
+    const BATCH = 4;
     for (let i = 0; i < totalChunks; i += BATCH) {
       const indices: number[] = [];
       for (let j = i; j < Math.min(i + BATCH, totalChunks); j++) {
@@ -227,7 +271,6 @@ async function syncServerVideoWithFirestore(expectedFileName?: string) {
 
 async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: CollectionEntry) => void) {
   const collectionsToSeed = [
-    'settings',
     'packages',
     'tickets',
     'hotels',
@@ -240,66 +283,70 @@ async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: Collect
 
   let changed = false;
 
-  // Always sync settings/global from live Firestore (using no-op PATCH fallback if GET returns 429)
+  // 1. Always pull latest `settings/global` from live Firestore so Netlify edits overwrite local Express cache
   try {
     const docJson = await fetchFirestoreDocOnServer('settings', 'global');
     if (docJson && docJson.fields) {
       const parsedDoc = parseFirestoreDoc(docJson);
       parsedDoc.id = 'global';
-      store.collections.settings = {
-        data: [parsedDoc],
-        updatedAt: Number(parsedDoc._updatedAt) || Date.now(),
-      };
-      changed = true;
-      onSeeded?.('settings', store.collections.settings);
-      console.log(`[CMS Store] Synced latest 'settings/global' from Firestore`);
+      const cloudUpdatedAt = Number(parsedDoc._updatedAt) || Date.now();
+      const localUpdatedAt = Number(store.collections.settings?.updatedAt) || 0;
+      if (!store.collections.settings || cloudUpdatedAt >= localUpdatedAt) {
+        store.collections.settings = {
+          data: [parsedDoc],
+          updatedAt: cloudUpdatedAt,
+        };
+        changed = true;
+        onSeeded?.('settings', store.collections.settings);
+        console.log(`[CMS Store] Synced latest 'settings/global' from Firestore`);
+      }
 
       if (parsedDoc.heroVideoSource === 'upload' && parsedDoc.heroVideoFileName) {
-        await syncServerVideoWithFirestore(parsedDoc.heroVideoFileName);
+        await syncServerVideoWithFirestore(parsedDoc.heroVideoFileName, parsedDoc.heroVideoUrl);
       }
     }
   } catch (_e) {}
 
+  // 2. Sync all catalog & operations collections via :runQuery & cms_snapshots (avoids 403 LIST)
   for (const colName of collectionsToSeed) {
-    if (
-      store.collections[colName] &&
-      Array.isArray(store.collections[colName].data) &&
-      store.collections[colName].data.length > 0
-    ) {
-      continue;
-    }
-    if (serverReadQuotaExceeded) {
-      try {
-        const snapDoc = await fetchFirestoreDocOnServer('cms_snapshots', colName);
-        const itemsJson = snapDoc?.fields?.itemsJson?.stringValue;
-        if (itemsJson) {
-          const docs = JSON.parse(itemsJson);
-          if (Array.isArray(docs) && docs.length > 0) {
-            store.collections[colName] = { data: docs, updatedAt: 1 };
-            changed = true;
-            onSeeded?.(colName, store.collections[colName]);
-          }
-        }
-      } catch (_e) {}
-      continue;
-    }
     try {
-      const res = await fetch(`${FIRESTORE_BASE_URL}/${colName}?pageSize=100`);
-      if (res.status === 429) {
-        serverReadQuotaExceeded = true;
-        continue;
+      const [snapDoc, queryDocs] = await Promise.all([
+        fetchFirestoreDocOnServer('cms_snapshots', colName),
+        runQueryCollectionOnServer(colName, 200)
+      ]);
+
+      let nextData: any[] | null = null;
+      let nextUpdatedAt = 0;
+
+      const itemsJson = snapDoc?.fields?.itemsJson?.stringValue;
+      if (itemsJson) {
+        try {
+          const parsedSnap = JSON.parse(itemsJson);
+          if (Array.isArray(parsedSnap)) {
+            nextData = parsedSnap;
+            nextUpdatedAt = Number(snapDoc?.fields?.updatedAt?.integerValue || 0);
+          }
+        } catch (_e) {}
       }
-      if (!res.ok) continue;
-      const json: any = await res.json();
-      if (Array.isArray(json.documents) && json.documents.length > 0) {
-        const docs = json.documents.map(parseFirestoreDoc);
+
+      const queryMaxTs = Array.isArray(queryDocs)
+        ? queryDocs.reduce((m, d) => Math.max(m, Number(d?._updatedAt) || 0), 0)
+        : 0;
+
+      if (Array.isArray(queryDocs) && queryDocs.length > 0 && (!nextData || queryMaxTs > nextUpdatedAt)) {
+        nextData = queryDocs;
+        nextUpdatedAt = queryMaxTs;
+      }
+
+      const localUpdatedAt = Number(store.collections[colName]?.updatedAt) || 0;
+      if (nextData && (nextData.length > 0 || colName === 'reviews') && nextUpdatedAt >= localUpdatedAt) {
         store.collections[colName] = {
-          data: docs,
-          updatedAt: 1,
+          data: nextData,
+          updatedAt: nextUpdatedAt || Date.now(),
         };
         changed = true;
         onSeeded?.(colName, store.collections[colName]);
-        console.log(`[CMS Store] Seeded '${colName}' from Firestore (${docs.length} docs)`);
+        console.log(`[CMS Store] Synced '${colName}' from Firestore (${nextData.length} docs)`);
       }
     } catch (_e) {}
   }
@@ -409,8 +456,15 @@ async function startServer() {
     saveStoreToDisk(store);
     broadcastUpdate(col, entry);
 
-    if (col === 'settings' && incomingData[0]?.heroVideoSource === 'upload' && incomingData[0]?.heroVideoFileName) {
-      syncServerVideoWithFirestore(incomingData[0].heroVideoFileName).catch(() => {});
+    if (
+      col === 'settings' &&
+      incomingData[0]?.heroVideoSource === 'upload' &&
+      incomingData[0]?.heroVideoFileName
+    ) {
+      syncServerVideoWithFirestore(
+        incomingData[0].heroVideoFileName,
+        incomingData[0].heroVideoUrl
+      ).catch(() => {});
     }
 
     return res.json({ ok: true, updatedAt: entry.updatedAt });
@@ -449,28 +503,6 @@ async function startServer() {
     } catch (_e) {}
 
     const videoUrl = `/api/cms-video/${key}?v=${version}`;
-
-    if (
-      store.collections.settings &&
-      Array.isArray(store.collections.settings.data) &&
-      store.collections.settings.data.length > 0
-    ) {
-      store.collections.settings.data = store.collections.settings.data.map((docItem: any) =>
-        docItem.id === 'global'
-          ? {
-              ...docItem,
-              heroVideoUrl: videoUrl,
-              featuredVideoEmbedUrl: videoUrl,
-              heroVideoSource: 'upload',
-              heroVideoFileName: decodedFileName,
-              _updatedAt: version
-            }
-          : docItem
-      );
-      store.collections.settings.updatedAt = version;
-      saveStoreToDisk(store);
-      broadcastUpdate('settings', store.collections.settings);
-    }
 
     return {
       ok: true,

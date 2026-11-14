@@ -1093,10 +1093,10 @@ export default function CatalogBrowser({
                       <div>
                         <div className="text-left lg:text-right">
                           <span className="text-xs text-zinc-400 line-through font-semibold block">
-                            RM {origPrice.toLocaleString()}
+                            RM {(Number(origPrice) || 0).toLocaleString()}
                           </span>
                           <div className="text-2xl font-black text-zinc-950 tracking-tight leading-none mt-0.5">
-                            RM {displayPrice.toLocaleString()}
+                            RM {(Number(displayPrice) || 0).toLocaleString()}
                           </div>
                           <span className="text-[11px] text-zinc-500 font-medium">per person (twin-sharing)</span>
                         </div>
@@ -1584,7 +1584,7 @@ export default function CatalogBrowser({
                   <div className="p-4 pt-2 border-t border-zinc-100 flex items-center justify-between">
                     <div>
                       <span className="text-[10px] text-zinc-400 block leading-none">Starting From</span>
-                      <span className="text-base font-extrabold text-zinc-950">RM {displayPrice.toLocaleString()} <span className="text-xs font-normal text-zinc-500">/pax</span></span>
+                      <span className="text-base font-extrabold text-zinc-950">RM {(Number(displayPrice) || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">/pax</span></span>
                     </div>
                     <span className="bg-rose-600 hover:bg-rose-500 text-white font-black text-xs py-2 px-3.5 rounded-xl shadow-xs inline-flex items-center gap-1">
                       <span>Reserve Table</span>
@@ -1652,7 +1652,7 @@ export default function CatalogBrowser({
                   <div className="p-4 pt-2 border-t border-zinc-100 flex items-center justify-between">
                     <div>
                       <span className="text-[10px] text-zinc-400 block leading-none">Starting From</span>
-                      <span className="text-base font-extrabold text-zinc-950">RM {displayPrice.toLocaleString()} <span className="text-xs font-normal text-zinc-500">/pax</span></span>
+                      <span className="text-base font-extrabold text-zinc-950">RM {(Number(displayPrice) || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">/pax</span></span>
                     </div>
                     <span className="bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs py-2 px-3.5 rounded-xl shadow-xs inline-flex items-center gap-1">
                       <span>Book Cruise</span>

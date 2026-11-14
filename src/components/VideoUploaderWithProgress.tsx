@@ -29,15 +29,22 @@ import {
   setVideoSourceMode,
   isDirectVideoSource,
   isUploadedVideoUrl,
+  isUniversalHttpVideoUrl,
   DEFAULT_SCENIC_HERO_VIDEO,
   StoredVideoItem,
   StorageAuditResult
 } from '../lib/videoStorage';
+import {
+  getFirebaseConsoleStorageUrl,
+  getFirebaseConsoleStorageRulesUrl
+} from '../lib/firebase';
 
 export interface VideoAppliedMetadata {
   sourceMode: 'upload' | 'url';
   fileName?: string;
   serverUrl?: string | null;
+  backend?: 'firebase-storage' | 'firestore-chunks' | 'local';
+  errorReason?: string;
 }
 
 interface VideoUploaderWithProgressProps {
@@ -109,6 +116,7 @@ export default function VideoUploaderWithProgress({
   const [uploadStatus, setUploadStatus] = useState<string>('');
   const [fileStats, setFileStats] = useState<{ name: string; sizeMb: string; loadedMb: string } | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
+  const [storageRulesLocked, setStorageRulesLocked] = useState<boolean>(false);
   const [showStorageExplainer, setShowStorageExplainer] = useState<boolean>(false);
 
   // Stored videos list for the library
@@ -140,38 +148,56 @@ export default function VideoUploaderWithProgress({
     }
   };
 
-  // Load uploaded video from IndexedDB / Server on mount if source mode is 'upload'
+  // Load uploaded video from Firebase Storage / Firestore Chunks / IndexedDB
   useEffect(() => {
     let isMounted = true;
     const mode =
       currentVideoSource === 'upload' || isUploadedVideoUrl(currentVideoUrl)
         ? 'upload'
-        : getVideoSourceMode();
+        : currentVideoSource || getVideoSourceMode();
 
     if (mode === 'upload') {
-      if (isUploadedVideoUrl(currentVideoUrl)) {
+      if (isUniversalHttpVideoUrl(currentVideoUrl)) {
         setActiveSourceMode('upload');
         setActiveUrl(currentVideoUrl);
       } else {
-        loadVideoBlob(storageKey, currentVideoFileName).then((savedObjectUrl) => {
+        loadVideoBlob(storageKey, currentVideoFileName, currentVideoUrl).then((savedObjectUrl) => {
           if (!isMounted) return;
-          if (savedObjectUrl) {
+          if (savedObjectUrl && !savedObjectUrl.startsWith('firestore-video://')) {
             setActiveSourceMode('upload');
             setActiveUrl(savedObjectUrl);
           }
         });
       }
-    } else if (currentVideoUrl && !currentVideoUrl.startsWith('blob:')) {
+    } else if (
+      currentVideoUrl &&
+      !currentVideoUrl.startsWith('blob:') &&
+      !currentVideoUrl.startsWith('firestore-video://')
+    ) {
       setActiveUrl(sanitizeInitialUrl(currentVideoUrl));
     }
 
     const handleVideoUpdated = (e: any) => {
       const detail = e.detail;
       if (!detail) return;
-      const nextUrl = detail.serverUrl || detail.videoUrl;
-      if (nextUrl) {
-        setActiveUrl(nextUrl);
+      const playableUrl =
+        (isUniversalHttpVideoUrl(detail.serverUrl) ? detail.serverUrl : null) ||
+        (detail.videoUrl && !String(detail.videoUrl).startsWith('firestore-video://')
+          ? detail.videoUrl
+          : null);
+
+      if (playableUrl) {
+        setActiveUrl(playableUrl);
+      } else if (detail.serverUrl && String(detail.serverUrl).startsWith('firestore-video://')) {
+        loadVideoBlob(storageKey, detail.fileName || currentVideoFileName, detail.serverUrl).then(
+          (resolved) => {
+            if (resolved && !resolved.startsWith('firestore-video://')) {
+              setActiveUrl(resolved);
+            }
+          }
+        );
       }
+
       if (detail.sourceMode) {
         setActiveSourceMode(detail.sourceMode);
       }
@@ -189,41 +215,58 @@ export default function VideoUploaderWithProgress({
     };
   }, [storageKey]);
 
-  // Sync external currentVideoUrl whenever it updates from Firestore or Server
+  // Sync external currentVideoUrl whenever it updates from Firestore
   useEffect(() => {
+    let isMounted = true;
     if (!currentVideoUrl) return;
 
-    // If the incoming URL is an uploaded server video (/api/cms-video/... or /uploads/...), always honor it as 'upload'
     if (isUploadedVideoUrl(currentVideoUrl) || currentVideoSource === 'upload') {
-      const targetStreamUrl = isUploadedVideoUrl(currentVideoUrl)
-        ? currentVideoUrl
-        : '/api/cms-video/hero_background_video';
       setActiveSourceMode('upload');
-      if (activeUrl !== targetStreamUrl) {
-        setActiveUrl(targetStreamUrl);
-      }
       if (currentVideoFileName) {
         setActiveFileName(currentVideoFileName);
       }
-      return;
+
+      if (isUniversalHttpVideoUrl(currentVideoUrl)) {
+        if (activeUrl !== currentVideoUrl) {
+          setActiveUrl(currentVideoUrl);
+        }
+        return;
+      }
+
+      loadVideoBlob(storageKey, currentVideoFileName, currentVideoUrl).then((resolved) => {
+        if (isMounted && resolved && !resolved.startsWith('firestore-video://')) {
+          setActiveUrl((prev) => (prev !== resolved ? resolved : prev));
+        }
+      });
+      return () => {
+        isMounted = false;
+      };
     }
 
     if (currentVideoSource === 'url') {
       setActiveSourceMode('url');
-      if (!currentVideoUrl.startsWith('blob:') && !currentVideoUrl.includes('viddler.com')) {
+      if (
+        !currentVideoUrl.startsWith('blob:') &&
+        !currentVideoUrl.includes('viddler.com') &&
+        !currentVideoUrl.startsWith('firestore-video://')
+      ) {
         setActiveUrl(currentVideoUrl);
         setUrlInput(currentVideoUrl);
       }
       return;
     }
 
-    if (!currentVideoUrl.startsWith('blob:') && !currentVideoUrl.includes('viddler.com')) {
+    if (
+      !currentVideoUrl.startsWith('blob:') &&
+      !currentVideoUrl.includes('viddler.com') &&
+      !currentVideoUrl.startsWith('firestore-video://')
+    ) {
       setActiveUrl(currentVideoUrl);
       setUrlInput(currentVideoUrl);
     }
   }, [currentVideoUrl, currentVideoSource, currentVideoFileName]);
 
-  // Handle local video file upload with real-time chunked server upload progress
+  // Handle local video file upload with Firebase Storage primary + Firestore chunks fallback
   const handleVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -244,14 +287,15 @@ export default function VideoUploaderWithProgress({
     setIsUploading(true);
     setUploadProgress(2);
     setUploadSuccess(false);
-    setUploadStatus(`Uploading ${file.name} (${totalSizeMb} MB) to server & Firebase in chunks...`);
+    setStorageRulesLocked(false);
+    setUploadStatus(`Uploading ${file.name} (${totalSizeMb} MB) to Firebase Cloud...`);
 
     try {
-      const { playbackUrl, serverUrl, fileName } = await saveVideoBlob(
+      const { playbackUrl, serverUrl, fileName, backend, errorReason } = await saveVideoBlob(
         storageKey,
         file,
         file.name,
-        (percent, loadedMb, totalMb) => {
+        (percent, loadedMb, totalMb, stageNote) => {
           setUploadProgress(percent);
           setFileStats({
             name: file.name,
@@ -259,7 +303,7 @@ export default function VideoUploaderWithProgress({
             loadedMb
           });
           setUploadStatus(
-            `Uploading video to server: ${percent}% (${loadedMb} MB of ${totalMb} MB)`
+            `${stageNote || 'Uploading video to Firebase Cloud'}: ${percent}% (${loadedMb} MB of ${totalMb} MB)`
           );
         }
       );
@@ -268,17 +312,37 @@ export default function VideoUploaderWithProgress({
       setActiveSourceMode('upload');
       setActiveFileName(fileName);
       setActiveUrl(playbackUrl);
-      // Clear URL input box so URL never conflicts with uploaded file
       setUrlInput('');
       setIsUploading(false);
-      setUploadSuccess(true);
-      setUploadStatus(
-        `Uploaded "${fileName}" (100%)! Synced to Server & Firebase — playing live across all browsers.`
+
+      const syncedToCloud = backend === 'firebase-storage' || backend === 'firestore-chunks';
+      const isRulesLocked = Boolean(
+        errorReason && (errorReason.includes('Production Mode') || errorReason.includes('403'))
       );
+      setStorageRulesLocked(isRulesLocked);
+      setUploadSuccess(syncedToCloud);
+
+      if (backend === 'firebase-storage') {
+        setUploadStatus(
+          `Uploaded "${fileName}" (100%) to Firebase Storage CDN! Live on Phones, Netlify & AI Studio.`
+        );
+      } else if (backend === 'firestore-chunks') {
+        setUploadStatus(
+          isRulesLocked
+            ? `Uploaded "${fileName}" via Firestore Cloud Chunks fallback because Firebase Storage is in Production Mode (403). Update Storage Rules to stream directly via Storage CDN.`
+            : `Uploaded "${fileName}" (100%) to Firebase Firestore Cloud Chunks! Synced across Phones, Netlify & AI Studio.`
+        );
+      } else {
+        setUploadStatus(
+          errorReason ||
+            `Saved "${fileName}" locally in this browser only. Click "Get Started" in Firebase Storage Console to sync large videos across Phones & Netlify.`
+        );
+      }
+
       refreshLibrary();
       runStorageAudit();
 
-      // Broadcast event so homepage hero & mobile video immediately update
+      // Broadcast event so homepage hero & mobile video immediately update in current tab
       window.dispatchEvent(
         new CustomEvent('gfk-video-updated', {
           detail: {
@@ -294,9 +358,20 @@ export default function VideoUploaderWithProgress({
       onVideoApplied(serverUrl || playbackUrl, {
         sourceMode: 'upload',
         fileName,
-        serverUrl
+        serverUrl,
+        backend,
+        errorReason
       });
-      showToast(`Video "${fileName}" uploaded (100%) and published live across all browsers!`);
+
+      if (syncedToCloud) {
+        showToast(
+          `Video "${fileName}" published to Firebase Cloud — live across all browsers & phones!`
+        );
+      } else {
+        showToast(
+          `Saved "${fileName}" locally. Enable Firebase Storage in Console to sync >75MB videos to Phones & Netlify.`
+        );
+      }
     } catch (err: any) {
       console.error('Failed to save video:', err);
       setIsUploading(false);
@@ -320,7 +395,7 @@ export default function VideoUploaderWithProgress({
     setActiveUrl(cleanUrl);
     setUrlInput(cleanUrl);
     setUploadSuccess(true);
-    setUploadStatus('Video URL applied & active across Desktop & Mobile!');
+    setUploadStatus('Video URL applied & synced to Firebase across Phones, Netlify & AI Studio!');
     refreshLibrary();
     runStorageAudit();
 
@@ -329,13 +404,14 @@ export default function VideoUploaderWithProgress({
         detail: {
           key: 'hero_background_video',
           videoUrl: cleanUrl,
+          serverUrl: cleanUrl,
           sourceMode: 'url'
         }
       })
     );
 
-    onVideoApplied(cleanUrl, { sourceMode: 'url' });
-    showToast('Video URL applied live to Homepage!');
+    onVideoApplied(cleanUrl, { sourceMode: 'url', serverUrl: cleanUrl });
+    showToast('Video URL synced to Firebase & live across all devices!');
   };
 
   // Activate an existing video from library
@@ -352,7 +428,7 @@ export default function VideoUploaderWithProgress({
           setUrlInput('');
         }
         setUploadSuccess(true);
-        setUploadStatus(`"${item.name}" is now the active Homepage video.`);
+        setUploadStatus(`"${item.name}" is now synced to Firebase & active across all devices.`);
         refreshLibrary();
         runStorageAudit();
 
@@ -361,17 +437,19 @@ export default function VideoUploaderWithProgress({
             detail: {
               key: 'hero_background_video',
               videoUrl: result.activeUrl,
+              serverUrl: result.cloudUrl,
               sourceMode: result.sourceMode,
               fileName: result.fileName
             }
           })
         );
 
-        onVideoApplied(result.activeUrl, {
+        onVideoApplied(result.cloudUrl || result.activeUrl, {
           sourceMode: result.sourceMode,
-          fileName: result.fileName
+          fileName: result.fileName,
+          serverUrl: result.cloudUrl
         });
-        showToast(`Switched active video to "${item.name}"!`);
+        showToast(`Switched active video to "${item.name}" & synced to Firebase!`);
       }
     } catch (_e) {
       showToast('Could not activate video.');
@@ -1006,18 +1084,28 @@ export default function VideoUploaderWithProgress({
       {/* Upload status banner */}
       {uploadStatus && !isUploading && (
         <div
-          className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2 ${
+          className={`p-3 rounded-2xl text-xs font-bold flex flex-wrap items-center gap-2 ${
             uploadSuccess
               ? 'bg-emerald-100/90 text-emerald-950 border border-emerald-300'
-              : 'bg-zinc-100 text-zinc-700 border border-zinc-200'
+              : 'bg-amber-50 text-amber-950 border border-amber-300'
           }`}
         >
           {uploadSuccess ? (
             <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
           ) : (
-            <AlertCircle className="w-4 h-4 text-zinc-500 shrink-0" />
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
           )}
           <span className="flex-1">{uploadStatus}</span>
+          {(!uploadSuccess || storageRulesLocked) && (
+            <a
+              href={storageRulesLocked ? getFirebaseConsoleStorageRulesUrl() : getFirebaseConsoleStorageUrl()}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3 py-1 rounded-lg bg-amber-800 hover:bg-amber-900 text-white text-[11px] font-black shrink-0"
+            >
+              {storageRulesLocked ? 'Open Storage Rules' : 'Enable Firebase Storage'}
+            </a>
+          )}
         </div>
       )}
 

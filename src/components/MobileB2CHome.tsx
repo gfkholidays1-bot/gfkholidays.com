@@ -5,7 +5,9 @@ import {
   getUploadedServerVideoUrl,
   isDirectVideoSource,
   isUploadedVideoUrl,
-  ensureUploadedVideoSyncedToServer
+  isUniversalHttpVideoUrl,
+  ensureUploadedVideoSyncedToServer,
+  DEFAULT_SCENIC_HERO_VIDEO
 } from '../lib/videoStorage';
 import {
   Search,
@@ -107,68 +109,81 @@ export default function MobileB2CHome({
   const [packagePax, setPackagePax] = useState(2);
   const [packageTab, setPackageTab] = useState<'itinerary' | 'terms'>('itinerary');
 
+  const isExpressHost = (): boolean =>
+    typeof window !== 'undefined' &&
+    (window.location.hostname.includes('run.app') || window.location.hostname === 'localhost');
+
   const resolvePreferredMobileVideo = (): string => {
+    const hasExplicitSource = Boolean(globalSettings.heroVideoSource);
     const isUploadMode =
       globalSettings.heroVideoSource === 'upload' ||
       isUploadedVideoUrl(globalSettings.heroVideoUrl) ||
-      getVideoSourceMode() === 'upload';
+      (!hasExplicitSource && getVideoSourceMode() === 'upload');
 
     if (isUploadMode) {
-      if (isUploadedVideoUrl(globalSettings.heroVideoUrl)) {
+      if (isUniversalHttpVideoUrl(globalSettings.heroVideoUrl)) {
         return globalSettings.heroVideoUrl!;
       }
+      if (
+        globalSettings.heroVideoUrl &&
+        isExpressHost() &&
+        globalSettings.heroVideoUrl.startsWith('/api/cms-video/')
+      ) {
+        return globalSettings.heroVideoUrl;
+      }
       const serverUpload = getUploadedServerVideoUrl();
-      if (serverUpload) return serverUpload;
-      return '/api/cms-video/hero_background_video';
+      if (
+        serverUpload &&
+        (isUniversalHttpVideoUrl(serverUpload) ||
+          (isExpressHost() && serverUpload.startsWith('/api/cms-video/')))
+      ) {
+        return serverUpload;
+      }
+      return DEFAULT_SCENIC_HERO_VIDEO;
     }
 
     const rawUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
-    if (rawUrl && !rawUrl.includes('viddler.com')) {
+    if (rawUrl && !rawUrl.includes('viddler.com') && !rawUrl.startsWith('firestore-video://')) {
       return rawUrl;
     }
-    return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+    return DEFAULT_SCENIC_HERO_VIDEO;
   };
 
   const [activeFeaturedVideo, setActiveFeaturedVideo] = useState<string>(resolvePreferredMobileVideo);
 
   useEffect(() => {
-    let isMounted = true;
-    const isUploadMode =
-      globalSettings.heroVideoSource === 'upload' ||
-      isUploadedVideoUrl(globalSettings.heroVideoUrl) ||
-      getVideoSourceMode() === 'upload';
-
-    if (isUploadMode) {
-      ensureUploadedVideoSyncedToServer('hero_background_video', globalSettings.heroVideoFileName);
-    }
-
-    const alreadyHasUploadStream =
-      activeFeaturedVideo.startsWith('/api/cms-video/') ||
-      activeFeaturedVideo.startsWith('/uploads/') ||
-      activeFeaturedVideo.startsWith('blob:');
-
-    if (isUploadMode && !alreadyHasUploadStream) {
-      loadVideoBlob('hero_background_video', globalSettings.heroVideoFileName).then((heroBlob) => {
-        if (isMounted && heroBlob) {
-          setActiveFeaturedVideo(heroBlob);
-        }
-      });
-    }
-
     const handleVideoUpdated = (event: any) => {
-      const { videoUrl, serverUrl } = event.detail || {};
-      const nextUrl = serverUrl || videoUrl;
-      if (nextUrl && nextUrl !== activeFeaturedVideo) {
-        setActiveFeaturedVideo(nextUrl);
+      const { videoUrl, serverUrl, fileName } = event.detail || {};
+      const preferredPlayable =
+        (isUniversalHttpVideoUrl(serverUrl) ? serverUrl : null) ||
+        (videoUrl && !String(videoUrl).startsWith('firestore-video://') ? videoUrl : null) ||
+        (serverUrl && isExpressHost() && String(serverUrl).startsWith('/api/cms-video/')
+          ? serverUrl
+          : null);
+
+      if (preferredPlayable) {
+        setActiveFeaturedVideo((prev) => (prev !== preferredPlayable ? preferredPlayable : prev));
+        return;
+      }
+
+      if (serverUrl && String(serverUrl).startsWith('firestore-video://')) {
+        loadVideoBlob(
+          'hero_background_video',
+          fileName || globalSettings.heroVideoFileName,
+          serverUrl
+        ).then((blobUrl) => {
+          if (blobUrl) {
+            setActiveFeaturedVideo((prev) => (prev !== blobUrl ? blobUrl : prev));
+          }
+        });
       }
     };
 
     window.addEventListener('gfk-video-updated', handleVideoUpdated);
     return () => {
-      isMounted = false;
       window.removeEventListener('gfk-video-updated', handleVideoUpdated);
     };
-  }, []);
+  }, [globalSettings.heroVideoFileName]);
 
   useEffect(() => {
     const el = mobileVideoRef.current;
@@ -184,30 +199,57 @@ export default function MobileB2CHome({
   }, [activeFeaturedVideo]);
 
   useEffect(() => {
+    let isMounted = true;
     const incomingUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
-    if (!incomingUrl) return;
+    const isUploadMode =
+      globalSettings.heroVideoSource === 'upload' || isUploadedVideoUrl(incomingUrl);
 
-    if (isUploadedVideoUrl(incomingUrl) || globalSettings.heroVideoSource === 'upload') {
-      const targetStreamUrl = isUploadedVideoUrl(incomingUrl)
-        ? incomingUrl
-        : '/api/cms-video/hero_background_video';
-      if (activeFeaturedVideo !== targetStreamUrl) {
-        setActiveFeaturedVideo(targetStreamUrl);
+    if (isUploadMode) {
+      ensureUploadedVideoSyncedToServer('hero_background_video', globalSettings.heroVideoFileName);
+
+      if (isUniversalHttpVideoUrl(incomingUrl)) {
+        setActiveFeaturedVideo((prev) => (prev !== incomingUrl! ? incomingUrl! : prev));
+        return () => {
+          isMounted = false;
+        };
       }
-      return;
+
+      loadVideoBlob(
+        'hero_background_video',
+        globalSettings.heroVideoFileName,
+        incomingUrl
+      ).then((resolvedUrl) => {
+        if (!isMounted || !resolvedUrl) return;
+        if (!resolvedUrl.startsWith('firestore-video://')) {
+          setActiveFeaturedVideo((prev) => (prev !== resolvedUrl ? resolvedUrl : prev));
+        }
+      });
+
+      return () => {
+        isMounted = false;
+      };
     }
 
-    if (globalSettings.heroVideoSource === 'url') {
-      if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeFeaturedVideo) {
-        setActiveFeaturedVideo(incomingUrl);
-      }
-      return;
+    if (
+      incomingUrl &&
+      !incomingUrl.includes('viddler.com') &&
+      !incomingUrl.startsWith('firestore-video://')
+    ) {
+      setActiveFeaturedVideo((prev) => (prev !== incomingUrl ? incomingUrl : prev));
+    } else if (!incomingUrl) {
+      setActiveFeaturedVideo(DEFAULT_SCENIC_HERO_VIDEO);
     }
 
-    if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeFeaturedVideo) {
-      setActiveFeaturedVideo(incomingUrl);
-    }
-  }, [globalSettings.heroVideoUrl, globalSettings.featuredVideoEmbedUrl, globalSettings.heroVideoSource, globalSettings.heroVideoFileName]);
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    globalSettings.heroVideoUrl,
+    globalSettings.featuredVideoEmbedUrl,
+    globalSettings.heroVideoSource,
+    globalSettings.heroVideoFileName,
+    (globalSettings as any)._updatedAt
+  ]);
 
   const resolveImage = (keyOrUrl?: string, fallbackKey = 'kl') => {
     if (!keyOrUrl) return imageMap[fallbackKey] || imageMap.kl;
@@ -469,14 +511,15 @@ export default function MobileB2CHome({
                       }
                     }}
                     onError={() => {
-                      loadVideoBlob('hero_background_video').then((blobUrl) => {
-                        if (blobUrl && blobUrl !== src) {
+                      loadVideoBlob(
+                        'hero_background_video',
+                        globalSettings.heroVideoFileName,
+                        globalSettings.heroVideoUrl
+                      ).then((blobUrl) => {
+                        if (blobUrl && blobUrl !== src && !blobUrl.startsWith('firestore-video://')) {
                           setActiveFeaturedVideo(blobUrl);
-                        } else {
-                          const fallback = 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
-                          if (src !== fallback) {
-                            setActiveFeaturedVideo(fallback);
-                          }
+                        } else if (src !== DEFAULT_SCENIC_HERO_VIDEO) {
+                          setActiveFeaturedVideo(DEFAULT_SCENIC_HERO_VIDEO);
                         }
                       });
                     }}
@@ -1496,7 +1539,7 @@ export default function MobileB2CHome({
                 <span className="text-[9px] text-zinc-400 block font-semibold">Total Price ({ticketPax} Passes)</span>
                 <div className="text-base font-black text-white">
                   RM{' '}
-                  {((activeTicketModal.ticketCategories?.[ticketSelectedCategoryIdx]?.price || activeTicketModal.price) * ticketPax).toLocaleString()}
+                  {(((Number(activeTicketModal.ticketCategories?.[ticketSelectedCategoryIdx]?.price ?? activeTicketModal.price) || 0) * ticketPax) || 0).toLocaleString()}
                 </div>
               </div>
               <button
@@ -1768,7 +1811,7 @@ export default function MobileB2CHome({
                 <span className="text-[9px] text-zinc-400 block font-semibold">Total Price ({hotelNights} Nights)</span>
                 <div className="text-base font-black text-white">
                   RM{' '}
-                  {((activeHotelModal.roomCategories?.[hotelSelectedRoomIdx]?.price || activeHotelModal.price) * hotelNights).toLocaleString()}
+                  {(((Number(activeHotelModal.roomCategories?.[hotelSelectedRoomIdx]?.price ?? activeHotelModal.price) || 0) * hotelNights) || 0).toLocaleString()}
                 </div>
               </div>
               <button
@@ -1969,7 +2012,7 @@ export default function MobileB2CHome({
               <div>
                 <span className="text-[9px] text-zinc-400 block font-semibold">Total ({packagePax} Travelers)</span>
                 <div className="text-base font-black text-white">
-                  RM {(activePackageModal.base_price * packagePax).toLocaleString()}
+                  RM {(((Number(activePackageModal.base_price) || 0) * packagePax) || 0).toLocaleString()}
                 </div>
               </div>
               <button

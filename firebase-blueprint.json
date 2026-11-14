@@ -207,6 +207,31 @@
         "partnerMarqueeLogos": { "type": "array" }
       },
       "required": ["id"]
+    },
+    "CmsSnapshot": {
+      "title": "CmsSnapshot",
+      "description": "Single-document collection mirror for reliable cross-device real-time sync",
+      "type": "object",
+      "properties": {
+        "itemsJson": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["itemsJson", "updatedAt"]
+    },
+    "CmsVideoChunk": {
+      "title": "CmsVideoChunk",
+      "description": "Chunked video binary slices and metadata fallback when Firebase Storage is unavailable",
+      "type": "object",
+      "properties": {
+        "data": { "type": "string" },
+        "index": { "type": "number" },
+        "version": { "type": "number" },
+        "fileName": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "sizeBytes": { "type": "number" },
+        "totalChunks": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      }
     }
   },
   "firestore": {
@@ -218,6 +243,8 @@
     "bookings": { "schema": "Booking", "description": "Collection of bookings" },
     "allotments": { "schema": "Allotment", "description": "Collection of inventory allotments" },
     "reviews": { "schema": "Review", "description": "Collection of product reviews" },
-    "settings": { "schema": "Setting", "description": "Collection of global settings and homepage CMS" }
+    "settings": { "schema": "Setting", "description": "Collection of global settings and homepage CMS" },
+    "cms_snapshots": { "schema": "CmsSnapshot", "description": "Atomic collection snapshot mirrors for instant cross-device sync" },
+    "cms_video_chunks": { "schema": "CmsVideoChunk", "description": "Chunked fallback video data for cross-device video playback" }
   }
 }

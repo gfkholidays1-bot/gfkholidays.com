@@ -254,10 +254,10 @@ export default function AgentPortal({
                             </span>
                           </td>
                           <td className="px-6 py-4 text-right text-emerald-600 font-black">
-                            +RM {b.commission.toLocaleString()}
+                            +RM {(Number(b.commission) || 0).toLocaleString()}
                           </td>
                           <td className="px-6 py-4 text-right font-black text-zinc-900 text-sm">
-                            RM {b.total.toLocaleString()}
+                            RM {(Number(b.total) || 0).toLocaleString()}
                           </td>
                         </tr>
                       );

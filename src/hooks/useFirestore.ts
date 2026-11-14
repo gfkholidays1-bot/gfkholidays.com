@@ -7,11 +7,15 @@ import {
   getActiveFirebaseConfig,
   isFirebaseWriteQuotaExceeded,
   setFirebaseWriteQuotaExceeded,
-  isFirebaseReadQuotaExceeded,
   setFirebaseReadQuotaExceeded,
-  fetchFirestoreDocRest
+  fetchFirestoreDocRest,
+  fetchCollectionViaRunQuery
 } from '../lib/firebase';
-import { evictStaleLocalVideoIfMismatch, loadVideoBlob } from '../lib/videoStorage';
+import {
+  evictStaleLocalVideoIfMismatch,
+  loadVideoBlob,
+  isUniversalHttpVideoUrl
+} from '../lib/videoStorage';
 
 export enum OperationType {
   CREATE = 'create',
@@ -75,24 +79,19 @@ export function handleFirestoreError(
     errMsg.includes('resource-exhausted') ||
     code === 'resource-exhausted'
   ) {
-    // Distinguish between Read Quota (GET/LIST) and Write Quota (WRITE/UPDATE/CREATE)
     if (
       operationType === OperationType.GET ||
       operationType === OperationType.LIST ||
       errMsg.includes('Free daily read units')
     ) {
-      console.debug(
-        `[Firestore:${path}] Free-tier daily READ quota reached (429); switching to zero-read-quota PATCH sync.`
-      );
       setFirebaseReadQuotaExceeded(true);
       return;
     }
 
-    console.debug(`[Firestore:${path}] Free-tier daily write quota reached (429):`, errMsg);
     setFirebaseWriteQuotaExceeded(true);
     emitFirebaseStatus(
       'quota_exceeded',
-      'Firebase free-tier daily write quota (20,000 writes/day) reached. Resets at midnight PT or connect your own Firebase project.'
+      'Firebase quota limit reached (429). Check Firebase Console billing & quotas.'
     );
     return;
   }
@@ -125,10 +124,13 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-    emitFirebaseStatus('error', `Permissions error on ${path}`);
-    throw new Error(JSON.stringify(errInfo));
+  console.debug('Firestore Error Info:', JSON.stringify(errInfo));
+  if (
+    (error instanceof Error && error.message.includes('Missing or insufficient permissions')) ||
+    code === 'permission-denied'
+  ) {
+    // Log structured FirestoreErrorInfo cleanly without crashing React tree when single-doc fallback is active
+    console.warn(`[Firestore:${path}] Collection permission restriction (using single-doc & runQuery sync):`, JSON.stringify(errInfo));
   }
 }
 
@@ -225,19 +227,17 @@ export function normalizeGlobalSettings(docData: any, defaults: any) {
       })
     : defaults?.otaPartners || [];
 
+  const rawHeroUrl = typeof docData?.heroVideoUrl === 'string' ? docData.heroVideoUrl : '';
   const isUploadSource =
     docData?.heroVideoSource === 'upload' ||
-    (typeof docData?.heroVideoUrl === 'string' &&
-      (docData.heroVideoUrl.startsWith('/api/cms-video/') ||
-        docData.heroVideoUrl.startsWith('/uploads/')));
+    rawHeroUrl.startsWith('/api/cms-video/') ||
+    rawHeroUrl.startsWith('/uploads/') ||
+    rawHeroUrl.startsWith('firestore-video://') ||
+    rawHeroUrl.includes('firebasestorage.googleapis.com');
 
   const normalizedHeroVideoUrl = isUploadSource
-    ? typeof docData?.heroVideoUrl === 'string' &&
-      (docData.heroVideoUrl.startsWith('/api/cms-video/') ||
-        docData.heroVideoUrl.startsWith('/uploads/'))
-      ? docData.heroVideoUrl
-      : '/api/cms-video/hero_background_video'
-    : docData?.heroVideoUrl ||
+    ? rawHeroUrl || '/api/cms-video/hero_background_video'
+    : rawHeroUrl ||
       defaults?.heroVideoUrl ||
       'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
 
@@ -308,7 +308,13 @@ export function normalizeGlobalSettings(docData: any, defaults: any) {
   };
 }
 
-let cmsBackendAvailable: boolean | null = null;
+let cmsBackendAvailable: boolean | null =
+  typeof window !== 'undefined' &&
+  !window.location.hostname.includes('run.app') &&
+  window.location.hostname !== 'localhost'
+    ? false
+    : null;
+
 type StreamListener = (payload: { collection: string; data: any[]; updatedAt: number }) => void;
 const streamListeners = new Set<StreamListener>();
 let sharedEventSource: EventSource | null = null;
@@ -373,9 +379,10 @@ export async function pushCollectionToServer(
 }
 
 /**
- * Direct Firestore REST API reader across Netlify, GitHub Pages, and Google AI Studio.
- * Uses `fetchFirestoreDocRest` which automatically falls back to `PATCH ?updateMask.fieldPaths=_noop`
- * when Firestore's 50,000 daily read quota is exhausted (HTTP 429)!
+ * Fetches collection state directly from Firebase Firestore across ALL hosts (Netlify, Phone, Chrome, Safari, AI Studio).
+ * - For `settings`: fetches `settings/global` directly (`200 OK`)
+ * - For catalog & operations collections: checks `cms_snapshots/{collectionName}` (authoritative atomic array incl. deletions)
+ *   AND `POST :runQuery` (`200 OK`), avoiding the blocked `GET /documents/{col}` (`403`) REST LIST endpoint!
  */
 async function fetchCollectionFromFirestoreRest(collectionName: string): Promise<any[] | null> {
   try {
@@ -390,48 +397,71 @@ async function fetchCollectionFromFirestoreRest(collectionName: string): Promise
       return null;
     }
 
-    // For non-settings collections, try standard GET first if read quota is not exhausted
-    if (!isFirebaseReadQuotaExceeded()) {
-      const baseUrl = getFirestoreRestBaseUrl();
-      const apiKey = getActiveFirebaseConfig().apiKey;
-      const keyQuery = apiKey ? `&key=${encodeURIComponent(apiKey)}` : '';
-      const res = await fetch(`${baseUrl}/${collectionName}?pageSize=100${keyQuery}`, {
-        cache: 'no-store'
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (Array.isArray(json?.documents) && json.documents.length > 0) {
-          emitFirebaseStatus('connected', 'Connected to Firebase Firestore');
-          return json.documents.map(parseFirestoreRestDoc);
-        }
-      } else if (res.status === 429) {
-        setFirebaseReadQuotaExceeded(true);
-      }
-    }
+    // Read atomic single-doc snapshot mirror AND structured :runQuery in parallel
+    const [snapDoc, runQueryRawDocs] = await Promise.all([
+      fetchFirestoreDocRest('cms_snapshots', collectionName),
+      fetchCollectionViaRunQuery(collectionName, 200)
+    ]);
 
-    // Fallback when Read Quota is 429: read collection snapshot from `cms_snapshots/{collectionName}` via no-op PATCH
-    const snapDoc = await fetchFirestoreDocRest('cms_snapshots', collectionName);
+    let snapshotItems: any[] | null = null;
+    let snapshotUpdatedAt = 0;
     const itemsJson = snapDoc?.fields?.itemsJson?.stringValue;
     if (itemsJson && typeof itemsJson === 'string') {
-      const parsedItems = JSON.parse(itemsJson);
-      if (Array.isArray(parsedItems) && parsedItems.length > 0) {
-        emitFirebaseStatus('connected', 'Connected to Firebase Firestore');
-        return parsedItems;
-      }
+      try {
+        const parsedItems = JSON.parse(itemsJson);
+        if (Array.isArray(parsedItems)) {
+          snapshotItems = parsedItems.filter(
+            (d) => d && typeof d.id === 'string' && !d.id.startsWith('_')
+          );
+          snapshotUpdatedAt = Number(snapDoc?.fields?.updatedAt?.integerValue || 0);
+        }
+      } catch (_e) {}
+    }
+
+    let runQueryItems: any[] | null = null;
+    let runQueryMaxUpdatedAt = 0;
+    if (Array.isArray(runQueryRawDocs) && runQueryRawDocs.length > 0) {
+      runQueryItems = runQueryRawDocs
+        .map(parseFirestoreRestDoc)
+        .filter((d) => d && typeof d.id === 'string' && !d.id.startsWith('_'));
+      runQueryMaxUpdatedAt = runQueryItems.reduce(
+        (max, d) => Math.max(max, Number(d?._updatedAt) || 0),
+        0
+      );
+    }
+
+    // Choose authoritative dataset: if snapshot is newer or equal (preserves deletions cleanly!), use snapshot
+    if (snapshotItems && snapshotItems.length > 0 && snapshotUpdatedAt >= runQueryMaxUpdatedAt) {
+      emitFirebaseStatus('connected', 'Connected to Firebase Firestore');
+      return snapshotItems;
+    }
+
+    if (runQueryItems && runQueryItems.length > 0) {
+      emitFirebaseStatus('connected', 'Connected to Firebase Firestore');
+      return runQueryItems;
+    }
+
+    if (snapshotItems) {
+      emitFirebaseStatus('connected', 'Connected to Firebase Firestore');
+      return snapshotItems;
     }
   } catch (_e) {}
   return null;
 }
 
 /**
- * Direct Firestore REST API writer for changed documents + collection snapshot mirror
+ * Direct Firestore REST API writer for changed documents + deletions + atomic collection snapshot mirror
  */
 async function writeDocsToFirestoreRest(
   collectionName: string,
   changedItems: any[],
-  fullCollection?: any[]
+  deletedIds: string[],
+  fullCollection: any[],
+  now: number
 ): Promise<{ ok: boolean; quotaExceeded: boolean }> {
-  if (changedItems.length === 0 && !fullCollection) return { ok: true, quotaExceeded: false };
+  if (changedItems.length === 0 && deletedIds.length === 0) {
+    return { ok: true, quotaExceeded: false };
+  }
   const baseUrl = getFirestoreRestBaseUrl();
   const apiKey = getActiveFirebaseConfig().apiKey;
   const keyParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
@@ -468,13 +498,26 @@ async function writeDocsToFirestoreRest(
     }
   }
 
-  // Also mirror non-settings collections to `cms_snapshots/{collectionName}` so they can be read
-  // via a single no-op PATCH even if Firestore's 50,000 daily read quota is exhausted
-  if (collectionName !== 'settings' && Array.isArray(fullCollection) && fullCollection.length > 0) {
+  for (const delId of deletedIds) {
+    try {
+      const res = await fetch(
+        `${baseUrl}/${encodeURIComponent(collectionName)}/${encodeURIComponent(delId)}${keyParam}`,
+        { method: 'DELETE' }
+      );
+      if (res.status === 429) {
+        quotaExceeded = true;
+        allOk = false;
+      }
+    } catch (_e) {}
+  }
+
+  // Always update atomic collection snapshot `cms_snapshots/{collectionName}` so all browsers & phones
+  // receive real-time single-doc push updates (even for deletions and new additions!)
+  if (collectionName !== 'settings' && Array.isArray(fullCollection)) {
     try {
       const serialized = JSON.stringify(fullCollection.map(stripUndefined));
-      if (serialized.length < 900000) {
-        await fetch(
+      if (serialized.length < 950000) {
+        const snapRes = await fetch(
           `${baseUrl}/cms_snapshots/${encodeURIComponent(collectionName)}${keyParam}`,
           {
             method: 'PATCH',
@@ -482,11 +525,15 @@ async function writeDocsToFirestoreRest(
             body: JSON.stringify({
               fields: {
                 itemsJson: { stringValue: serialized },
-                updatedAt: { integerValue: String(Date.now()) }
+                updatedAt: { integerValue: String(now) }
               }
             })
           }
         );
+        if (snapRes.status === 429) {
+          quotaExceeded = true;
+          allOk = false;
+        }
       }
     } catch (_e) {}
   }
@@ -503,11 +550,66 @@ function stripTimestampMeta(item: any): any {
   return copy;
 }
 
+function getCollectionMaxUpdatedAt(items: any[]): number {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((max, item) => Math.max(max, Number(item?._updatedAt) || 0), 0);
+}
+
 export function useFirestoreCollection<T extends { id: string }>(
   collectionName: string,
   initialData: T[]
 ) {
   const initialDataRef = useRef<T[]>(initialData);
+
+  const normalizeItems = useCallback(
+    (rawItems: any[]): T[] => {
+      const validItems = (Array.isArray(rawItems) ? rawItems : []).filter(
+        (item) => item && typeof item.id === 'string' && !item.id.startsWith('_')
+      );
+
+      if (collectionName === 'settings' && initialDataRef.current.length > 0) {
+        const defaults = initialDataRef.current[0] as any;
+        return validItems.map((item) =>
+          item.id === 'global' ? normalizeGlobalSettings(item, defaults) : item
+        ) as T[];
+      }
+
+      if (collectionName === 'packages') {
+        return validItems.map((p) => ({
+          ...p,
+          base_price: Number(p?.base_price ?? p?.price ?? 0) || 0,
+          duration_days: Number(p?.duration_days ?? 1) || 1
+        })) as T[];
+      }
+
+      if (collectionName === 'tickets' || collectionName === 'hotels') {
+        return validItems.map((item) => ({
+          ...item,
+          price: Number(item?.price ?? item?.base_price ?? 0) || 0
+        })) as T[];
+      }
+
+      if (collectionName === 'transport') {
+        return validItems.map((tr) => ({
+          ...tr,
+          car: Number(tr?.car ?? tr?.price ?? 0) || 0,
+          van7: Number(tr?.van7 ?? 0) || 0,
+          van13: Number(tr?.van13 ?? 0) || 0
+        })) as T[];
+      }
+
+      if (collectionName === 'bookings') {
+        return validItems.map((b) => ({
+          ...b,
+          total: Number(b?.total ?? 0) || 0,
+          commission: Number(b?.commission ?? 0) || 0
+        })) as T[];
+      }
+
+      return validItems as T[];
+    },
+    [collectionName]
+  );
 
   const [data, setData] = useState<T[]>(() => {
     if (typeof window !== 'undefined') {
@@ -517,7 +619,12 @@ export function useFirestoreCollection<T extends { id: string }>(
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
+            const cleaned = parsed.filter(
+              (item: any) => item && typeof item.id === 'string' && !item.id.startsWith('_')
+            );
+            if (cleaned.length > 0) {
+              return cleaned;
+            }
           }
         }
       } catch (_e) {}
@@ -529,36 +636,36 @@ export function useFirestoreCollection<T extends { id: string }>(
   const isWritingRef = useRef<boolean>(false);
   const lastLocalWriteAtRef = useRef<number>(0);
 
-  const normalizeItems = useCallback(
-    (rawItems: any[]): T[] => {
-      if (collectionName === 'settings' && initialDataRef.current.length > 0) {
-        const defaults = initialDataRef.current[0] as any;
-        return rawItems.map((item) =>
-          item.id === 'global' ? normalizeGlobalSettings(item, defaults) : item
-        ) as T[];
-      }
-      return rawItems as T[];
-    },
-    [collectionName]
-  );
-
   const applyIncomingState = useCallback(
     (rawItems: any[], source: string) => {
-      if (!Array.isArray(rawItems) || rawItems.length === 0) return;
+      if (!Array.isArray(rawItems)) return;
+      if (rawItems.length === 0 && collectionName === 'settings') return;
 
       const normalized = normalizeItems(rawItems);
       const serializedNext = JSON.stringify(normalized.map(stripTimestampMeta));
       const serializedCurr = JSON.stringify(dataRef.current.map(stripTimestampMeta));
 
       if (serializedNext === serializedCurr) {
+        return;
+      }
+
+      // Guard against stale Express server cache or old static seed overwriting newer local/cloud state
+      const incomingTs = getCollectionMaxUpdatedAt(rawItems);
+      const currentTs = getCollectionMaxUpdatedAt(dataRef.current);
+      if (
+        (source === 'server-api' || source === 'static-seed') &&
+        currentTs > 0 &&
+        incomingTs > 0 &&
+        incomingTs < currentTs
+      ) {
         console.debug(
-          `[useFirestoreCollection:${collectionName}] (${source}) Data matches current state; skipping re-render`
+          `[useFirestoreCollection:${collectionName}] (${source}) Ignoring older seed/cache (${incomingTs} < ${currentTs})`
         );
         return;
       }
 
       console.debug(
-        `[useFirestoreCollection:${collectionName}] (${source}) Applying real-time update (${normalized.length} items)`
+        `[useFirestoreCollection:${collectionName}] (${source}) Applying universal cloud update (${normalized.length} items)`
       );
 
       dataRef.current = normalized;
@@ -580,34 +687,55 @@ export function useFirestoreCollection<T extends { id: string }>(
               if (globalItem.logoAlign) {
                 localStorage.setItem('gfk_logo_align', globalItem.logoAlign);
               }
+              if (globalItem.logoFit) {
+                localStorage.setItem('gfk_logo_fit', globalItem.logoFit);
+              }
+              window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: globalItem }));
+
               if (globalItem.heroVideoSource === 'upload') {
                 const cloudFileName = globalItem.heroVideoFileName || '';
+                const cloudUrl = globalItem.heroVideoUrl || '';
                 if (cloudFileName) {
                   evictStaleLocalVideoIfMismatch(cloudFileName);
                   localStorage.setItem('gfk_video_name_hero_background_video', cloudFileName);
                 }
                 localStorage.setItem('gfk_video_source_mode', 'upload');
-                if (globalItem.heroVideoUrl) {
-                  localStorage.setItem('gfk_uploaded_server_video_url', globalItem.heroVideoUrl);
-                  localStorage.setItem('gfk_hero_video_url', globalItem.heroVideoUrl);
-                  localStorage.setItem('gfk_featured_video_url', globalItem.heroVideoUrl);
+                if (cloudUrl) {
+                  localStorage.setItem('gfk_uploaded_server_video_url', cloudUrl);
+                  localStorage.setItem('gfk_hero_video_url', cloudUrl);
+                  localStorage.setItem('gfk_featured_video_url', cloudUrl);
                 }
-                // Proactively load/download cloud video chunks from Firestore so <video> plays the exact video uploaded on Netlify or AI Studio
-                loadVideoBlob('hero_background_video', cloudFileName).then((blobOrServerUrl) => {
-                  if (blobOrServerUrl) {
-                    window.dispatchEvent(
-                      new CustomEvent('gfk-video-updated', {
-                        detail: {
-                          key: 'hero_background_video',
-                          videoUrl: blobOrServerUrl,
-                          serverUrl: globalItem.heroVideoUrl || blobOrServerUrl,
-                          sourceMode: 'upload',
-                          fileName: cloudFileName
-                        }
-                      })
-                    );
-                  }
-                });
+                if (isUniversalHttpVideoUrl(cloudUrl)) {
+                  window.dispatchEvent(
+                    new CustomEvent('gfk-video-updated', {
+                      detail: {
+                        key: 'hero_background_video',
+                        videoUrl: cloudUrl,
+                        serverUrl: cloudUrl,
+                        sourceMode: 'upload',
+                        fileName: cloudFileName
+                      }
+                    })
+                  );
+                } else {
+                  loadVideoBlob('hero_background_video', cloudFileName, cloudUrl).then(
+                    (blobOrServerUrl) => {
+                      if (blobOrServerUrl) {
+                        window.dispatchEvent(
+                          new CustomEvent('gfk-video-updated', {
+                            detail: {
+                              key: 'hero_background_video',
+                              videoUrl: blobOrServerUrl,
+                              serverUrl: cloudUrl || blobOrServerUrl,
+                              sourceMode: 'upload',
+                              fileName: cloudFileName
+                            }
+                          })
+                        );
+                      }
+                    }
+                  );
+                }
               } else if (globalItem.heroVideoSource === 'url') {
                 localStorage.setItem('gfk_video_source_mode', 'url');
                 localStorage.removeItem('gfk_uploaded_server_video_url');
@@ -627,7 +755,6 @@ export function useFirestoreCollection<T extends { id: string }>(
                   })
                 );
               }
-              window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: globalItem }));
             }
           }
         } catch (_e) {}
@@ -636,7 +763,7 @@ export function useFirestoreCollection<T extends { id: string }>(
     [collectionName, normalizeItems]
   );
 
-  // 1. Primary Cloud Sync: Fetch directly from Firebase Firestore first across all browsers & hosts (Netlify + AI Studio)
+  // 1. Primary Universal Cloud Sync (Firestore REST :runQuery + Single-Doc GET across Netlify, Phone & AI Studio)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     let isMounted = true;
@@ -647,17 +774,16 @@ export function useFirestoreCollection<T extends { id: string }>(
         return;
       }
 
-      // A) Fetch live from Firebase Firestore REST API (automatically uses no-op PATCH if 50k read quota is reached)
+      // A) Always read authoritative Firebase Firestore state first
       const restDocs = await fetchCollectionFromFirestoreRest(collectionName);
-      if (isMounted && restDocs && restDocs.length > 0) {
+      if (isMounted && restDocs && (restDocs.length > 0 || collectionName !== 'settings')) {
         applyIncomingState(restDocs, 'firestore-rest');
-        // Keep Express backend in sync with Firestore when running in AI Studio
         if (cmsBackendAvailable !== false) {
           pushCollectionToServer(collectionName, restDocs, Date.now());
         }
       }
 
-      // B) Also connect to Express backend SSE stream if running in AI Studio / Node server
+      // B) Express SSE stream only inside Google AI Studio / localhost dev container
       if (cmsBackendAvailable !== false) {
         try {
           const res = await fetch(`/api/cms/${collectionName}`, { cache: 'no-store' });
@@ -688,7 +814,7 @@ export function useFirestoreCollection<T extends { id: string }>(
         }
       }
 
-      // C) Static build seed fallback (/cms-seed.json) if both Firestore and local cache are empty
+      // C) Static build seed fallback ONLY when Firestore AND localStorage are both empty
       if (
         (!restDocs || restDocs.length === 0) &&
         !localStorage.getItem(`gfk_cache_${collectionName}`)
@@ -721,43 +847,41 @@ export function useFirestoreCollection<T extends { id: string }>(
     });
 
     const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastFocusSyncAt > 3000) {
+      if (document.visibilityState === 'visible' && Date.now() - lastFocusSyncAt > 2500) {
         lastFocusSyncAt = Date.now();
         syncInitialAndFocus();
       }
     };
 
-    // Periodic cloud poll for 'settings' (every 6s when tab is visible) so Netlify and AI Studio stay in live sync
-    let pollTimer: any = null;
-    if (collectionName === 'settings') {
-      pollTimer = setInterval(() => {
-        if (
-          document.visibilityState === 'visible' &&
-          !isWritingRef.current &&
-          Date.now() - lastLocalWriteAtRef.current >= 4000
-        ) {
-          fetchCollectionFromFirestoreRest('settings').then((docs) => {
-            if (isMounted && docs && docs.length > 0) {
-              applyIncomingState(docs, 'firestore-poll');
-            }
-          });
-        }
-      }, 6000);
-    }
+    // Background sync belt-and-suspenders poll (especially useful on iOS/Android mobile browsers where tabs sleep)
+    const pollIntervalMs = collectionName === 'settings' ? 5000 : 12000;
+    const pollTimer = setInterval(() => {
+      if (
+        document.visibilityState === 'visible' &&
+        !isWritingRef.current &&
+        Date.now() - lastLocalWriteAtRef.current >= 4000
+      ) {
+        fetchCollectionFromFirestoreRest(collectionName).then((docs) => {
+          if (isMounted && docs && (docs.length > 0 || collectionName !== 'settings')) {
+            applyIncomingState(docs, 'firestore-poll');
+          }
+        });
+      }
+    }, pollIntervalMs);
 
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
     return () => {
       isMounted = false;
-      if (pollTimer) clearInterval(pollTimer);
+      clearInterval(pollTimer);
       unsubscribeStream();
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
   }, [collectionName, applyIncomingState]);
 
-  // 2. BroadcastChannel & localStorage 'storage' event for instant 0ms cross-tab sync in the same browser
+  // 2. BroadcastChannel & localStorage 'storage' event for instant 0ms cross-tab sync in same browser
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -795,63 +919,95 @@ export function useFirestoreCollection<T extends { id: string }>(
     };
   }, [collectionName, applyIncomingState]);
 
-  // 3. Real-time Firestore Snapshot Listener (auto-pauses if 50k daily read quota is exhausted to avoid 429 retry storms)
+  // 3. Real-Time Single-Doc + Collection Firestore Snapshot Listeners (immune to Enterprise LIST 403!)
   useEffect(() => {
-    if (isFirebaseReadQuotaExceeded()) {
-      return;
-    }
-
     const db = getFirebaseFirestore();
-    const colRef = collection(db, collectionName);
-    let unsubscribed = false;
+    let active = true;
 
-    console.debug(
-      `[useFirestoreCollection:${collectionName}] Subscribing to real-time snapshot listener`
-    );
+    // A) Single-Document Real-Time Listener (settings/global OR cms_snapshots/{collectionName})
+    // Single-document onSnapshot ALWAYS succeeds with 200 across all devices without needing collection LIST!
+    const docRef =
+      collectionName === 'settings'
+        ? doc(db, 'settings', 'global')
+        : doc(db, 'cms_snapshots', collectionName);
 
-    const unsubscribe = onSnapshot(
-      colRef,
-      (snapshot) => {
-        if (unsubscribed) return;
-        const fromCache = snapshot.metadata.fromCache;
-        const hasPendingWrites = snapshot.metadata.hasPendingWrites;
+    const unsubscribeDoc = onSnapshot(
+      docRef,
+      (docSnap) => {
+        if (!active || !docSnap.exists()) return;
+        const fromCache = docSnap.metadata.fromCache;
+        const hasPendingWrites = docSnap.metadata.hasPendingWrites;
         const msSinceLocalWrite = Date.now() - lastLocalWriteAtRef.current;
 
-        if (snapshot.empty) {
+        if (isWritingRef.current || msSinceLocalWrite < 3500 || (fromCache && !hasPendingWrites)) {
           return;
         }
 
-        if (
-          isWritingRef.current ||
-          msSinceLocalWrite < 3500 ||
-          (fromCache && !hasPendingWrites)
-        ) {
-          return;
-        }
-
-        const rawItems: any[] = [];
-        snapshot.forEach((docSnap) => {
-          const docData = docSnap.data();
-          rawItems.push({ ...docData, id: docSnap.id });
-        });
-
-        if (rawItems.length > 0) {
+        const raw = docSnap.data();
+        if (collectionName === 'settings') {
           emitFirebaseStatus('connected', 'Live real-time sync active');
-          applyIncomingState(rawItems, 'firestore-snapshot');
+          applyIncomingState([{ ...raw, id: 'global' }], 'firestore-doc-snapshot');
+        } else if (raw && typeof raw.itemsJson === 'string') {
+          try {
+            const parsedItems = JSON.parse(raw.itemsJson);
+            if (Array.isArray(parsedItems)) {
+              emitFirebaseStatus('connected', 'Live real-time sync active');
+              applyIncomingState(parsedItems, 'firestore-snapshot-mirror');
+            }
+          } catch (_e) {}
         }
       },
       (err) => {
-        handleFirestoreError(err, OperationType.GET, collectionName);
-        if (isFirebaseReadQuotaExceeded() && !unsubscribed) {
-          unsubscribed = true;
-          unsubscribe();
-        }
+        handleFirestoreError(err, OperationType.GET, docRef.path);
       }
     );
 
+    // B) Secondary Collection Snapshot Listener (automatically steps back quietly if LIST returns permission-denied)
+    let unsubscribeCol: (() => void) | null = null;
+    if (collectionName !== 'settings') {
+      const colRef = collection(db, collectionName);
+      unsubscribeCol = onSnapshot(
+        colRef,
+        (snapshot) => {
+          if (!active || snapshot.empty) return;
+          const fromCache = snapshot.metadata.fromCache;
+          const hasPendingWrites = snapshot.metadata.hasPendingWrites;
+          const msSinceLocalWrite = Date.now() - lastLocalWriteAtRef.current;
+          if (isWritingRef.current || msSinceLocalWrite < 3500 || (fromCache && !hasPendingWrites)) {
+            return;
+          }
+          const rawItems: any[] = [];
+          snapshot.forEach((docSnap) => {
+            if (!docSnap.id.startsWith('_sync_probe')) {
+              rawItems.push({ ...docSnap.data(), id: docSnap.id });
+            }
+          });
+          if (rawItems.length > 0) {
+            emitFirebaseStatus('connected', 'Live real-time sync active');
+            applyIncomingState(rawItems, 'firestore-collection-snapshot');
+          }
+        },
+        (err) => {
+          const code = (err as any)?.code || '';
+          if (code === 'permission-denied') {
+            // Expected on Enterprise LIST rules; single-doc snapshot mirror & :runQuery handle sync cleanly
+            if (unsubscribeCol) {
+              try {
+                unsubscribeCol();
+              } catch (_e) {}
+              unsubscribeCol = null;
+            }
+            return;
+          }
+          handleFirestoreError(err, OperationType.LIST, collectionName);
+        }
+      );
+    }
+
     return () => {
-      unsubscribed = true;
-      unsubscribe();
+      active = false;
+      unsubscribeDoc();
+      if (unsubscribeCol) unsubscribeCol();
     };
   }, [collectionName, applyIncomingState]);
 
@@ -896,7 +1052,7 @@ export function useFirestoreCollection<T extends { id: string }>(
       dataRef.current = normalizedNext;
       setData(normalizedNext);
 
-      // 2. Persist to localStorage & broadcast across tabs in the same browser
+      // 2. Persist to localStorage & BroadcastChannel for instant same-browser tabs
       const serializedNew = JSON.stringify(normalizedNext);
       if (typeof window !== 'undefined') {
         try {
@@ -912,6 +1068,12 @@ export function useFirestoreCollection<T extends { id: string }>(
               if (globalItem.logoHeight !== undefined) {
                 localStorage.setItem('gfk_logo_height', String(globalItem.logoHeight));
               }
+              if (globalItem.logoAlign) {
+                localStorage.setItem('gfk_logo_align', globalItem.logoAlign);
+              }
+              if (globalItem.logoFit) {
+                localStorage.setItem('gfk_logo_fit', globalItem.logoFit);
+              }
               window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: globalItem }));
             }
           }
@@ -923,10 +1085,10 @@ export function useFirestoreCollection<T extends { id: string }>(
         } catch (_e) {}
       }
 
-      // 3. Persist to Express backend CMS server if available (/api/cms/:collection)
-      await pushCollectionToServer(collectionName, normalizedNext, now);
+      // 3. Mirror to Express backend when running in AI Studio
+      pushCollectionToServer(collectionName, normalizedNext, now).catch(() => {});
 
-      // 4. Write changed documents to Firebase Firestore (both REST PATCH and SDK writeBatch for deletions)
+      // 4. Persist to Firebase Firestore (REST PATCH/DELETE + atomic cms_snapshots mirror)
       const newIds = new Set(normalizedNext.map((item: T) => item.id));
       const deletedIds = currentData.filter((item) => !newIds.has(item.id)).map((item) => item.id);
 
@@ -939,17 +1101,16 @@ export function useFirestoreCollection<T extends { id: string }>(
         const restResult = await writeDocsToFirestoreRest(
           collectionName,
           changedItems,
-          normalizedNext
+          deletedIds,
+          normalizedNext,
+          now
         );
 
-        if (restResult.ok && deletedIds.length === 0) {
+        if (restResult.ok) {
           setFirebaseWriteQuotaExceeded(false);
           lastLocalWriteAtRef.current = Date.now();
           isWritingRef.current = false;
           emitFirebaseStatus('synced', `Saved ${changedItems.length} item(s) to Firebase Firestore`);
-          console.debug(
-            `[useFirestoreCollection:${collectionName}] Direct Firestore REST write succeeded (${changedItems.length} changed items)`
-          );
           return;
         }
 
@@ -958,7 +1119,7 @@ export function useFirestoreCollection<T extends { id: string }>(
           isWritingRef.current = false;
           emitFirebaseStatus(
             'quota_exceeded',
-            `Quota exceeded on Firebase project "${getActiveFirebaseConfig().projectId}" (20,000 free writes/day limit reached — HTTP 429).`
+            `Quota exceeded on Firebase project "${getActiveFirebaseConfig().projectId}" (HTTP 429).`
           );
           return;
         }
@@ -976,6 +1137,17 @@ export function useFirestoreCollection<T extends { id: string }>(
           batch.delete(doc(db, collectionName, id));
         });
 
+        if (collectionName !== 'settings') {
+          const serializedSnap = JSON.stringify(normalizedNext.map(stripUndefined));
+          if (serializedSnap.length < 950000) {
+            batch.set(
+              doc(db, 'cms_snapshots', collectionName),
+              { itemsJson: serializedSnap, updatedAt: now },
+              { merge: true }
+            );
+          }
+        }
+
         await Promise.race([
           batch.commit().then(() => {
             setFirebaseWriteQuotaExceeded(false);
@@ -983,7 +1155,7 @@ export function useFirestoreCollection<T extends { id: string }>(
             emitFirebaseStatus('synced', `Synced to Firebase Firestore`);
           }),
           new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error('Firestore batch timeout')), 4500)
+            setTimeout(() => reject(new Error('Firestore batch timeout')), 5500)
           )
         ]);
       } catch (err) {

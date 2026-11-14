@@ -1,8 +1,11 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import {
-  getFirestore
+  getFirestore,
+  doc,
+  getDocFromServer
 } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 import firebaseConfigFromJson from '../../firebase-applet-config.json';
 
 export interface ActiveFirebaseConfig {
@@ -146,17 +149,37 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const firestore = db;
 export const auth = getAuth(app);
+export const storage = getStorage(app);
+
+// Validate connection to Firestore on boot per firebase-integration-rpc skill
+async function testBootConnection() {
+  try {
+    await getDocFromServer(doc(db, 'settings', 'global'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+if (typeof window !== 'undefined') {
+  testBootConnection();
+}
 
 export const getFirebaseAuth = () => auth;
 export const getFirebaseFirestore = () => db;
+export const getFirebaseStorage = () => storage;
 
 export interface FirebaseConnectionCheckResult {
   readOk: boolean;
   writeOk: boolean;
+  queryOk: boolean;
+  storageOk: boolean;
+  storageRulesLocked?: boolean;
   quotaExceeded: boolean;
   readQuotaBypassActive?: boolean;
   projectId: string;
   databaseId: string;
+  storageBucket: string;
   message: string;
 }
 
@@ -183,13 +206,48 @@ export function getFirebaseConsoleDatabaseUrl(): string {
   return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`;
 }
 
+export function getFirebaseConsoleStorageUrl(): string {
+  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/storage`;
+}
+
+export function getFirebaseConsoleStorageRulesUrl(): string {
+  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/storage/rules`;
+}
+
+/**
+ * Inspects whether Firebase Storage bucket exists AND whether Production Mode rules (403) block cms-videos access.
+ */
+export async function inspectFirebaseStorage(): Promise<{ exists: boolean; rulesLocked: boolean }> {
+  try {
+    const bucket = firebaseConfig.storageBucket;
+    if (!bucket) return { exists: false, rulesLocked: false };
+    const res = await fetch(
+      `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o?prefix=cms-videos%2F&maxResults=1`,
+      { cache: 'no-store' }
+    );
+    if (res.status === 404) {
+      return { exists: false, rulesLocked: false };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { exists: true, rulesLocked: true };
+    }
+    return { exists: res.ok, rulesLocked: false };
+  } catch (_e) {
+    return { exists: false, rulesLocked: false };
+  }
+}
+
+/**
+ * Check if Firebase Storage bucket exists and allows cms-videos operations.
+ */
+export async function checkFirebaseStorageBucket(): Promise<boolean> {
+  const status = await inspectFirebaseStorage();
+  return status.exists && !status.rulesLocked;
+}
+
 /**
  * Reads a single Firestore document via REST API.
- * If standard GET returns HTTP 429 (Free daily read units exceeded), automatically falls back
- * to a zero-op PATCH (?updateMask.fieldPaths=_noop with empty fields: {}), which executes via
- * the Write/Commit pipeline and returns HTTP 200 OK with the full current document fields!
- * This guarantees Netlify, GitHub Pages, and Google AI Studio stay 100% synced even when
- * the 50,000 daily read quota is exhausted.
+ * Uses GET first, and falls back to no-op PATCH if 429 read limit is ever hit.
  */
 export async function fetchFirestoreDocRest(
   collectionName: string,
@@ -199,7 +257,6 @@ export async function fetchFirestoreDocRest(
   const apiKey = firebaseConfig.apiKey;
   const docPath = `${baseUrl}/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
 
-  // 1. Try standard GET first if read quota is not known to be exhausted
   if (!liveReadQuotaExceeded) {
     try {
       const getUrl = apiKey ? `${docPath}?key=${encodeURIComponent(apiKey)}` : docPath;
@@ -216,7 +273,6 @@ export async function fetchFirestoreDocRest(
     } catch (_e) {}
   }
 
-  // 2. Fallback: Read document via no-op PATCH (?updateMask.fieldPaths=_noop)
   try {
     const patchUrl = `${docPath}?updateMask.fieldPaths=_noop${
       apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''
@@ -238,23 +294,75 @@ export async function fetchFirestoreDocRest(
   return null;
 }
 
+/**
+ * Executes a structured query (:runQuery) against Firestore REST API.
+ * Unlike GET /documents/{collection} (which returns 403 PERMISSION_DENIED on Enterprise editions),
+ * POST /documents:runQuery executes cleanly with HTTP 200 OK across all collections!
+ */
+export async function fetchCollectionViaRunQuery(
+  collectionName: string,
+  limit = 200
+): Promise<any[] | null> {
+  try {
+    const baseUrl = getFirestoreRestBaseUrl();
+    const apiKey = firebaseConfig.apiKey;
+    const url = `${baseUrl}:runQuery${apiKey ? `?key=${encodeURIComponent(apiKey)}` : ''}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: collectionName }],
+          limit
+        }
+      })
+    });
+    if (res.status === 429) {
+      liveReadQuotaExceeded = true;
+      return null;
+    }
+    if (!res.ok) return null;
+    liveReadQuotaExceeded = false;
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return null;
+    const docs = rows.map((r: any) => r?.document).filter(Boolean);
+    return docs;
+  } catch (_e) {
+    return null;
+  }
+}
+
 export async function testFirebaseConnection(): Promise<FirebaseConnectionCheckResult> {
   const baseUrl = getFirestoreRestBaseUrl();
   const apiKeyParam = firebaseConfig.apiKey ? `key=${encodeURIComponent(firebaseConfig.apiKey)}` : '';
   const result: FirebaseConnectionCheckResult = {
     readOk: false,
     writeOk: false,
+    queryOk: false,
+    storageOk: false,
+    storageRulesLocked: false,
     quotaExceeded: false,
     readQuotaBypassActive: false,
     projectId: firebaseConfig.projectId,
     databaseId: firebaseConfig.firestoreDatabaseId,
+    storageBucket: firebaseConfig.storageBucket,
     message: ''
   };
 
   try {
-    const readRes = await fetch(`${baseUrl}/settings/global${apiKeyParam ? `?${apiKeyParam}` : ''}`, {
-      cache: 'no-store'
-    });
+    const [readRes, queryDocs, storageStatus] = await Promise.all([
+      fetch(`${baseUrl}/settings/global${apiKeyParam ? `?${apiKeyParam}` : ''}`, {
+        cache: 'no-store'
+      }),
+      fetchCollectionViaRunQuery('packages', 5),
+      inspectFirebaseStorage()
+    ]);
+
+    result.storageOk = storageStatus.exists && !storageStatus.rulesLocked;
+    result.storageRulesLocked = storageStatus.rulesLocked;
+    result.queryOk = Array.isArray(queryDocs);
+
     if (readRes.ok || readRes.status === 404) {
       result.readOk = true;
       liveReadQuotaExceeded = false;
@@ -267,29 +375,34 @@ export async function testFirebaseConnection(): Promise<FirebaseConnectionCheckR
       return result;
     }
 
-    // Test write & no-op PATCH read fallback on settings/global
-    const patchReadUrl = `${baseUrl}/settings/global?updateMask.fieldPaths=_noop${
+    const writeUrl = `${baseUrl}/_diagnostics/ping?updateMask.fieldPaths=lastCheckedAt${
       apiKeyParam ? `&${apiKeyParam}` : ''
     }`;
-    const writeRes = await fetch(patchReadUrl, {
+    const writeRes = await fetch(writeUrl, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields: {} })
+      body: JSON.stringify({
+        fields: {
+          lastCheckedAt: { integerValue: String(Date.now()) }
+        }
+      })
     });
 
     if (writeRes.ok) {
       result.readOk = true;
       result.writeOk = true;
       liveWriteQuotaExceeded = false;
-      if (result.readQuotaBypassActive) {
-        result.message = `Connected to Firebase Firestore (${firebaseConfig.projectId}) — Live Cross-Host Sync Active (Free daily 50k read quota reached; automatic PATCH read-bypass is active so Netlify & AI Studio sync normally).`;
+      if (storageStatus.rulesLocked) {
+        result.message = `Firestore Read/Write & Catalog Query Active on "${firebaseConfig.projectId}". Firebase Storage bucket exists, but "Production Mode" rules are blocking cms-videos/ (403 Permission Denied). Update Storage Rules in Firebase Console -> Storage -> Rules.`;
+      } else if (!storageStatus.exists) {
+        result.message = `Firestore Read/Write & Catalog Query Active on "${firebaseConfig.projectId}"! (Firebase Storage bucket is not yet enabled — videos use Firestore chunk sync fallback until you click "Get Started" in Firebase Storage Console.)`;
       } else {
-        result.message = `Connected to Firebase Firestore (${firebaseConfig.projectId}) — Live Read & Write Active across AI Studio & Netlify`;
+        result.message = `Universal Cloud Sync Active on "${firebaseConfig.projectId}" — Firestore Read/Write + Catalog Queries + Firebase Storage CDN Ready across Phone, Netlify & AI Studio.`;
       }
     } else if (writeRes.status === 429) {
       result.quotaExceeded = true;
       liveWriteQuotaExceeded = true;
-      result.message = `Quota exceeded on Firebase project "${firebaseConfig.projectId}" (HTTP 429 RESOURCE_EXHAUSTED). Upgrade database or connect a new Firebase project below.`;
+      result.message = `Quota exceeded on Firebase project "${firebaseConfig.projectId}" (HTTP 429 RESOURCE_EXHAUSTED).`;
     } else {
       const errText = await writeRes.text();
       result.message = `Write HTTP ${writeRes.status}: ${errText.slice(0, 160)}`;

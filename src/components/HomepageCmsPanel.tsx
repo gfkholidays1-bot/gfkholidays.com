@@ -9,6 +9,8 @@ import {
   testFirebaseConnection,
   isFirebaseWriteQuotaExceeded,
   getFirebaseConsoleDatabaseUrl,
+  getFirebaseConsoleStorageUrl,
+  getFirebaseConsoleStorageRulesUrl,
   FirebaseConnectionCheckResult
 } from '../lib/firebase';
 import {
@@ -56,7 +58,9 @@ import {
   getVideoSourceMode,
   getUploadedServerVideoUrl,
   isUploadedVideoUrl,
-  ensureUploadedVideoSyncedToServer
+  isUniversalHttpVideoUrl,
+  ensureUploadedVideoSyncedToServer,
+  DEFAULT_SCENIC_HERO_VIDEO
 } from '../lib/videoStorage';
 
 interface HomepageCmsPanelProps {
@@ -88,24 +92,25 @@ export default function HomepageCmsPanel({
   const getSafeHeroVideo = (rawUrl?: string, sourceOverride?: 'upload' | 'url'): string => {
     const activeSource = sourceOverride || getVideoSourceMode();
     if (activeSource === 'upload') {
+      if (
+        rawUrl &&
+        (isUploadedVideoUrl(rawUrl) || isUniversalHttpVideoUrl(rawUrl)) &&
+        !rawUrl.startsWith('blob:')
+      ) {
+        return rawUrl;
+      }
       const serverVid = getUploadedServerVideoUrl();
-      if (serverVid) return serverVid;
-      if (rawUrl && isUploadedVideoUrl(rawUrl) && !rawUrl.startsWith('blob:')) return rawUrl;
-      return '/api/cms-video/hero_background_video';
+      if (serverVid && !serverVid.startsWith('blob:')) return serverVid;
+      return DEFAULT_SCENIC_HERO_VIDEO;
     }
-    return rawUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+    if (rawUrl && !rawUrl.includes('viddler.com') && !rawUrl.startsWith('blob:')) {
+      return rawUrl;
+    }
+    return DEFAULT_SCENIC_HERO_VIDEO;
   };
 
   const getSafeFeaturedVideo = (rawUrl?: string, sourceOverride?: 'upload' | 'url'): string => {
-    const activeSource = sourceOverride || getVideoSourceMode();
-    if (activeSource === 'upload') {
-      const serverVid = getUploadedServerVideoUrl();
-      if (serverVid) return serverVid;
-      if (rawUrl && isUploadedVideoUrl(rawUrl) && !rawUrl.startsWith('blob:')) return rawUrl;
-      return '/api/cms-video/hero_background_video';
-    }
-    if (rawUrl && !rawUrl.includes('viddler.com')) return rawUrl;
-    return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+    return getSafeHeroVideo(rawUrl, sourceOverride);
   };
 
   const existingGlobal = settings?.find((s: any) => s.id === 'global') || {};
@@ -271,36 +276,47 @@ export default function HomepageCmsPanel({
         ? customOverride.heroVideoFileName
         : formStateRef.current.heroVideoFileName;
 
-    let syncedServerVideoUrl = getUploadedServerVideoUrl();
-    if (effectiveVideoSource === 'upload' && !syncedServerVideoUrl) {
-      syncedServerVideoUrl = await ensureUploadedVideoSyncedToServer(
-        'hero_background_video',
-        effectiveFileName
-      );
-    }
-
-    const rawHeroVideo =
+    const candidateHero =
       customOverride?.heroVideoUrl ||
       getSafeHeroVideo(formStateRef.current.heroVideoUrl, effectiveVideoSource);
-    const safeHeroVideo =
-      effectiveVideoSource === 'upload'
-        ? syncedServerVideoUrl ||
-          (rawHeroVideo.startsWith('/api/cms-video/') || rawHeroVideo.startsWith('/uploads/')
-            ? rawHeroVideo
-            : '/api/cms-video/hero_background_video')
-        : rawHeroVideo.startsWith('blob:')
-        ? syncedServerVideoUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4'
-        : rawHeroVideo;
 
-    const rawFeaturedVideo =
+    let safeHeroVideo = candidateHero || DEFAULT_SCENIC_HERO_VIDEO;
+    if (effectiveVideoSource === 'upload') {
+      if (
+        candidateHero &&
+        (isUniversalHttpVideoUrl(candidateHero) ||
+          candidateHero.startsWith('firestore-video://') ||
+          candidateHero.startsWith('/api/cms-video/') ||
+          candidateHero.startsWith('/uploads/')) &&
+        !candidateHero.startsWith('blob:')
+      ) {
+        safeHeroVideo = candidateHero;
+      } else {
+        let syncedServerVideoUrl = getUploadedServerVideoUrl();
+        if (!syncedServerVideoUrl) {
+          syncedServerVideoUrl = await ensureUploadedVideoSyncedToServer(
+            'hero_background_video',
+            effectiveFileName
+          );
+        }
+        safeHeroVideo =
+          syncedServerVideoUrl && !syncedServerVideoUrl.startsWith('blob:')
+            ? syncedServerVideoUrl
+            : DEFAULT_SCENIC_HERO_VIDEO;
+      }
+    } else if (safeHeroVideo.startsWith('blob:') || safeHeroVideo.includes('viddler.com')) {
+      safeHeroVideo = DEFAULT_SCENIC_HERO_VIDEO;
+    }
+
+    const candidateFeatured =
       customOverride?.featuredVideoEmbedUrl ||
       getSafeFeaturedVideo(formStateRef.current.featuredVideoEmbedUrl, effectiveVideoSource);
     const safeFeaturedVideo =
       effectiveVideoSource === 'upload'
         ? safeHeroVideo
-        : rawFeaturedVideo.startsWith('blob:')
-        ? syncedServerVideoUrl || safeHeroVideo
-        : rawFeaturedVideo;
+        : candidateFeatured.startsWith('blob:') || candidateFeatured.includes('viddler.com')
+        ? safeHeroVideo
+        : candidateFeatured;
 
     const updatedGlobal: GlobalSettings = {
       ...formStateRef.current,
@@ -653,13 +669,98 @@ export default function HomepageCmsPanel({
 
             {firebaseTestResult && (
               <div
-                className={`p-3 rounded-xl border font-semibold space-y-2 ${
-                  firebaseTestResult.writeOk
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                className={`p-3.5 rounded-xl border font-semibold space-y-2.5 ${
+                  firebaseTestResult.writeOk && firebaseTestResult.queryOk
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                    : 'bg-amber-50 border-amber-200 text-amber-950'
                 }`}
               >
-                <div>{firebaseTestResult.message}</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="bg-white/80 border border-zinc-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-zinc-600">Firestore Write</span>
+                    <span className={`text-[11px] font-black ${firebaseTestResult.writeOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                      {firebaseTestResult.writeOk ? 'PASS' : 'FAIL'}
+                    </span>
+                  </div>
+                  <div className="bg-white/80 border border-zinc-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-zinc-600">Catalog Query</span>
+                    <span className={`text-[11px] font-black ${firebaseTestResult.queryOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                      {firebaseTestResult.queryOk ? 'PASS' : 'FAIL'}
+                    </span>
+                  </div>
+                  <div className="bg-white/80 border border-zinc-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-zinc-600">Storage CDN</span>
+                    <span
+                      className={`text-[11px] font-black ${
+                        firebaseTestResult.storageOk
+                          ? 'text-emerald-700'
+                          : 'text-amber-700'
+                      }`}
+                    >
+                      {firebaseTestResult.storageOk
+                        ? 'ACTIVE'
+                        : firebaseTestResult.storageRulesLocked
+                        ? 'RULES LOCKED (403)'
+                        : 'NOT ENABLED'}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-xs leading-relaxed">{firebaseTestResult.message}</div>
+                {firebaseTestResult.storageRulesLocked && (
+                  <div className="bg-white/90 border border-amber-300 rounded-xl p-3 space-y-2 text-xs text-amber-950">
+                    <p className="font-black">
+                      Firebase Storage is enabled in Production Mode (<code>HTTP 403 Permission denied</code> on <code>cms-videos/</code>):
+                    </p>
+                    <p className="text-[11px] text-amber-900 leading-relaxed">
+                      Production Mode sets <code>allow read, write: if false;</code> by default. Paste these scoped rules into <strong>Firebase Console &rarr; Storage &rarr; Rules</strong> and click <strong>Publish</strong> so admin video uploads stream via Firebase Storage CDN across all devices:
+                    </p>
+                    <pre className="bg-zinc-900 text-emerald-300 text-[10px] font-mono p-2.5 rounded-lg overflow-x-auto leading-relaxed">{`rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /cms-videos/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.resource.size < 500 * 1024 * 1024
+                   && request.resource.contentType.matches('video/.*');
+    }
+  }
+}`}</pre>
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <a
+                        href={getFirebaseConsoleStorageRulesUrl()}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-white px-3 py-1.5 rounded-lg font-bold text-xs"
+                      >
+                        <span>Open Firebase Storage &rarr; Rules</span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rulesText = `rules_version = '2';\nservice firebase.storage {\n  match /b/{bucket}/o {\n    match /cms-videos/{allPaths=**} {\n      allow read: if true;\n      allow write: if request.resource.size < 500 * 1024 * 1024\n                   && request.resource.contentType.matches('video/.*');\n    }\n  }\n}`;
+                          if (navigator.clipboard?.writeText) {
+                            navigator.clipboard.writeText(rulesText);
+                            showToast('Firebase Storage rules copied! Paste into Storage -> Rules and click Publish.');
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 bg-zinc-900 hover:bg-zinc-800 text-white px-3 py-1.5 rounded-lg font-bold text-xs cursor-pointer"
+                      >
+                        <span>Copy Storage Rules</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {!firebaseTestResult.storageOk && !firebaseTestResult.storageRulesLocked && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <a
+                      href={getFirebaseConsoleStorageUrl()}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-white px-3 py-1.5 rounded-lg font-bold text-xs"
+                    >
+                      <span>Open Firebase Storage Console &amp; Click &quot;Get Started&quot;</span>
+                    </a>
+                  </div>
+                )}
                 {firebaseTestResult.readQuotaBypassActive && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <a
@@ -668,7 +769,7 @@ export default function HomepageCmsPanel({
                       rel="noreferrer"
                       className="inline-flex items-center gap-1.5 bg-emerald-800 hover:bg-emerald-900 text-white px-3 py-1.5 rounded-lg font-bold text-xs"
                     >
-                      <span>Open Firebase Database Upgrade Dialog (50k Read Limit)</span>
+                      <span>Open Firebase Database Upgrade Dialog</span>
                     </a>
                   </div>
                 )}
@@ -856,7 +957,16 @@ export default function HomepageCmsPanel({
               onVideoApplied={(videoUrl, meta) => {
                 const sourceMode = meta?.sourceMode || (isUploadedVideoUrl(videoUrl) ? 'upload' : 'url');
                 const fileName = meta?.fileName || '';
-                const persistentUrl = meta?.serverUrl || videoUrl;
+                const persistentUrl = meta?.serverUrl !== undefined ? meta.serverUrl : videoUrl;
+
+                if (!persistentUrl || persistentUrl.startsWith('blob:') || persistentUrl.startsWith('data:')) {
+                  showToast(
+                    meta?.errorReason ||
+                      'Video active locally only. Enable Firebase Storage in Console for >75MB files to sync to Phones & Netlify.'
+                  );
+                  return;
+                }
+
                 const updated: GlobalSettings = {
                   ...formStateRef.current,
                   heroVideoUrl: persistentUrl,
@@ -871,21 +981,17 @@ export default function HomepageCmsPanel({
                   localStorage.setItem('gfk_featured_video_url', persistentUrl);
                 } catch (_e) {}
 
-                if (!persistentUrl.startsWith('blob:') && !persistentUrl.startsWith('data:')) {
-                  saveToFirebase(
-                    {
-                      heroVideoUrl: persistentUrl,
-                      featuredVideoEmbedUrl: persistentUrl,
-                      heroVideoSource: sourceMode,
-                      heroVideoFileName: fileName
-                    },
-                    sourceMode === 'upload'
-                      ? `Uploaded video "${fileName || 'file'}" saved & active on Desktop & Mobile!`
-                      : 'Unified Hero & Featured video URL updated & saved!'
-                  );
-                } else {
-                  showToast('Uploaded video active live on Desktop & Mobile!');
-                }
+                saveToFirebase(
+                  {
+                    heroVideoUrl: persistentUrl,
+                    featuredVideoEmbedUrl: persistentUrl,
+                    heroVideoSource: sourceMode,
+                    heroVideoFileName: fileName
+                  },
+                  sourceMode === 'upload'
+                    ? `Uploaded video "${fileName || 'file'}" synced to Firebase across Phones, Netlify & AI Studio!`
+                    : 'Unified Hero & Featured video URL synced to Firebase!'
+                );
               }}
             />
 

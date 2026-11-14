@@ -5,7 +5,9 @@ import {
   getUploadedServerVideoUrl,
   isDirectVideoSource,
   isUploadedVideoUrl,
-  ensureUploadedVideoSyncedToServer
+  isUniversalHttpVideoUrl,
+  ensureUploadedVideoSyncedToServer,
+  DEFAULT_SCENIC_HERO_VIDEO
 } from '../lib/videoStorage';
 import {
   Package,
@@ -105,71 +107,72 @@ export default function MalaysiaHome({
   const [heroMuted, setHeroMuted] = useState(true);
   const heroVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Unified Active Hero & Featured Video state (strict upload priority over URL)
+  const isExpressHost = (): boolean =>
+    typeof window !== 'undefined' &&
+    (window.location.hostname.includes('run.app') || window.location.hostname === 'localhost');
+
+  // Unified Active Hero & Featured Video state (Firestore cloud state takes strict precedence over localStorage)
   const resolvePreferredVideoUrl = (): string => {
+    const hasExplicitSource = Boolean(settings.heroVideoSource);
     const isUploadMode =
       settings.heroVideoSource === 'upload' ||
       isUploadedVideoUrl(settings.heroVideoUrl) ||
-      getVideoSourceMode() === 'upload';
+      (!hasExplicitSource && getVideoSourceMode() === 'upload');
 
     if (isUploadMode) {
-      if (isUploadedVideoUrl(settings.heroVideoUrl)) {
+      if (isUniversalHttpVideoUrl(settings.heroVideoUrl)) {
         return settings.heroVideoUrl!;
       }
+      if (settings.heroVideoUrl && isExpressHost() && settings.heroVideoUrl.startsWith('/api/cms-video/')) {
+        return settings.heroVideoUrl;
+      }
       const serverUpload = getUploadedServerVideoUrl();
-      if (serverUpload) return serverUpload;
-      return '/api/cms-video/hero_background_video';
+      if (serverUpload && (isUniversalHttpVideoUrl(serverUpload) || (isExpressHost() && serverUpload.startsWith('/api/cms-video/')))) {
+        return serverUpload;
+      }
+      // For firestore-video:// or remote hosts, loadVideoBlob() reconstructs blob: asynchronously; start with scenic default
+      return DEFAULT_SCENIC_HERO_VIDEO;
     }
 
     const rawUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
-    if (rawUrl && !rawUrl.includes('viddler.com')) {
+    if (rawUrl && !rawUrl.includes('viddler.com') && !rawUrl.startsWith('firestore-video://')) {
       return rawUrl;
     }
-    return 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
+    return DEFAULT_SCENIC_HERO_VIDEO;
   };
 
   const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(resolvePreferredVideoUrl);
 
-  // Ensure any matching IndexedDB video is synced and stale local blobs are evicted
+  // Listen for instant local admin video changes
   useEffect(() => {
-    let isMounted = true;
-
-    const isUploadMode =
-      settings.heroVideoSource === 'upload' ||
-      isUploadedVideoUrl(settings.heroVideoUrl) ||
-      getVideoSourceMode() === 'upload';
-
-    if (isUploadMode) {
-      ensureUploadedVideoSyncedToServer('hero_background_video', settings.heroVideoFileName);
-    }
-
-    const alreadyHasUploadStream =
-      activeHeroVideoUrl.startsWith('/api/cms-video/') ||
-      activeHeroVideoUrl.startsWith('/uploads/') ||
-      activeHeroVideoUrl.startsWith('blob:');
-
-    if (isUploadMode && !alreadyHasUploadStream) {
-      loadVideoBlob('hero_background_video', settings.heroVideoFileName).then((blobUrl) => {
-        if (isMounted && blobUrl) {
-          setActiveHeroVideoUrl(blobUrl);
-        }
-      });
-    }
-
     const handleVideoUpdated = (event: any) => {
-      const { videoUrl, serverUrl } = event.detail || {};
-      const nextUrl = serverUrl || videoUrl;
-      if (nextUrl && nextUrl !== activeHeroVideoUrl) {
-        setActiveHeroVideoUrl(nextUrl);
+      const { videoUrl, serverUrl, fileName } = event.detail || {};
+      const preferredPlayable =
+        (isUniversalHttpVideoUrl(serverUrl) ? serverUrl : null) ||
+        (videoUrl && !String(videoUrl).startsWith('firestore-video://') ? videoUrl : null) ||
+        (serverUrl && isExpressHost() && String(serverUrl).startsWith('/api/cms-video/') ? serverUrl : null);
+
+      if (preferredPlayable) {
+        setActiveHeroVideoUrl((prev) => (prev !== preferredPlayable ? preferredPlayable : prev));
+        return;
+      }
+
+      if (serverUrl && String(serverUrl).startsWith('firestore-video://')) {
+        loadVideoBlob('hero_background_video', fileName || settings.heroVideoFileName, serverUrl).then(
+          (blobUrl) => {
+            if (blobUrl) {
+              setActiveHeroVideoUrl((prev) => (prev !== blobUrl ? blobUrl : prev));
+            }
+          }
+        );
       }
     };
 
     window.addEventListener('gfk-video-updated', handleVideoUpdated);
     return () => {
-      isMounted = false;
       window.removeEventListener('gfk-video-updated', handleVideoUpdated);
     };
-  }, []);
+  }, [settings.heroVideoFileName]);
 
   // Keep video playing in continuous loop without stopping on re-renders
   useEffect(() => {
@@ -185,33 +188,53 @@ export default function MalaysiaHome({
     }
   }, [activeHeroVideoUrl, heroMuted]);
 
-  // Sync when settings props change from Server/Firestore so the Preview Section & all browsers stay in instant sync
+  // Reactively sync when Firestore settings update from any browser, Netlify, or Phone
   useEffect(() => {
+    let isMounted = true;
     const incomingUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
-    if (!incomingUrl) return;
+    const isUploadMode =
+      settings.heroVideoSource === 'upload' || isUploadedVideoUrl(incomingUrl);
 
-    if (isUploadedVideoUrl(incomingUrl) || settings.heroVideoSource === 'upload') {
-      const targetStreamUrl = isUploadedVideoUrl(incomingUrl)
-        ? incomingUrl
-        : '/api/cms-video/hero_background_video';
-      if (activeHeroVideoUrl !== targetStreamUrl) {
-        setActiveHeroVideoUrl(targetStreamUrl);
+    if (isUploadMode) {
+      ensureUploadedVideoSyncedToServer('hero_background_video', settings.heroVideoFileName);
+
+      // 1. Universal Firebase Storage HTTPS URL -> play directly everywhere
+      if (isUniversalHttpVideoUrl(incomingUrl)) {
+        setActiveHeroVideoUrl((prev) => (prev !== incomingUrl! ? incomingUrl! : prev));
+        return () => {
+          isMounted = false;
+        };
       }
-      return;
+
+      // 2. Reconstruct from IndexedDB / Firestore chunks (`cms_video_chunks`) or AI Studio server
+      loadVideoBlob('hero_background_video', settings.heroVideoFileName, incomingUrl).then((resolvedUrl) => {
+        if (!isMounted || !resolvedUrl) return;
+        if (!resolvedUrl.startsWith('firestore-video://')) {
+          setActiveHeroVideoUrl((prev) => (prev !== resolvedUrl ? resolvedUrl : prev));
+        }
+      });
+
+      return () => {
+        isMounted = false;
+      };
     }
 
-    // If Firestore explicitly says 'url', switch to the incoming URL immediately
-    if (settings.heroVideoSource === 'url') {
-      if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeHeroVideoUrl) {
-        setActiveHeroVideoUrl(incomingUrl);
-      }
-      return;
+    if (incomingUrl && !incomingUrl.includes('viddler.com') && !incomingUrl.startsWith('firestore-video://')) {
+      setActiveHeroVideoUrl((prev) => (prev !== incomingUrl ? incomingUrl : prev));
+    } else if (!incomingUrl) {
+      setActiveHeroVideoUrl(DEFAULT_SCENIC_HERO_VIDEO);
     }
 
-    if (!incomingUrl.includes('viddler.com') && incomingUrl !== activeHeroVideoUrl) {
-      setActiveHeroVideoUrl(incomingUrl);
-    }
-  }, [settings.heroVideoUrl, settings.featuredVideoEmbedUrl, settings.heroVideoSource, settings.heroVideoFileName]);
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    settings.heroVideoUrl,
+    settings.featuredVideoEmbedUrl,
+    settings.heroVideoSource,
+    settings.heroVideoFileName,
+    (settings as any)._updatedAt
+  ]);
 
   // Priority Malaysia Activities & Packages state
   const [activeCatalogTab, setActiveCatalogTab] = useState<'all' | 'packages' | 'tickets' | 'transport'>('all');
@@ -415,14 +438,15 @@ export default function MalaysiaHome({
                       }
                     }}
                     onError={() => {
-                      loadVideoBlob('hero_background_video').then((blobUrl) => {
-                        if (blobUrl && blobUrl !== src) {
+                      loadVideoBlob(
+                        'hero_background_video',
+                        settings.heroVideoFileName,
+                        settings.heroVideoUrl
+                      ).then((blobUrl) => {
+                        if (blobUrl && blobUrl !== src && !blobUrl.startsWith('firestore-video://')) {
                           setActiveHeroVideoUrl(blobUrl);
-                        } else {
-                          const fallback = 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4';
-                          if (src !== fallback) {
-                            setActiveHeroVideoUrl(fallback);
-                          }
+                        } else if (src !== DEFAULT_SCENIC_HERO_VIDEO) {
+                          setActiveHeroVideoUrl(DEFAULT_SCENIC_HERO_VIDEO);
                         }
                       });
                     }}
@@ -856,14 +880,16 @@ export default function MalaysiaHome({
               .slice(0, activeCatalogTab === 'packages' ? 8 : 4)
               .map((pkg) => {
                 const img = resolveImage(pkg.image, 'langkawi');
+                const safeBase = Number(pkg.base_price) || 0;
+                const commPct = Number(currentAgent?.commission) || 0;
                 const displayPrice = currentAgent
-                  ? Math.round(pkg.base_price * (1 - currentAgent.commission / 100))
-                  : pkg.base_price;
-                const origPrice = pkg.original_price || Math.round(pkg.base_price * 1.22);
-                const savingsPct = Math.max(
-                  5,
-                  Math.round(((origPrice - displayPrice) / origPrice) * 100)
-                );
+                  ? Math.round(safeBase * (1 - commPct / 100))
+                  : safeBase;
+                const origPrice = Number(pkg.original_price) || Math.round(safeBase * 1.22);
+                const savingsPct =
+                  origPrice > 0
+                    ? Math.max(5, Math.round(((origPrice - displayPrice) / origPrice) * 100))
+                    : 5;
 
                 return (
                   <div
@@ -918,10 +944,10 @@ export default function MalaysiaHome({
                     <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
                       <div>
                         <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                          RM {origPrice.toLocaleString()}
+                          RM {(origPrice || 0).toLocaleString()}
                         </span>
                         <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                          RM {displayPrice.toLocaleString()}
+                          RM {(displayPrice || 0).toLocaleString()}
                           <span className="text-xs font-normal text-zinc-500"> / pax</span>
                         </div>
                       </div>
@@ -939,10 +965,12 @@ export default function MalaysiaHome({
               .slice(0, activeCatalogTab === 'tickets' ? 8 : 4)
               .map((tk) => {
                 const img = resolveImage(tk.image, 'petronas');
+                const safePrice = Number(tk.price) || 0;
+                const commPct = Number(currentAgent?.commission) || 0;
                 const displayPrice = currentAgent
-                  ? Math.round(tk.price * (1 - currentAgent.commission / 100))
-                  : tk.price;
-                const origPrice = tk.originalPrice || Math.round(tk.price * 1.25);
+                  ? Math.round(safePrice * (1 - commPct / 100))
+                  : safePrice;
+                const origPrice = Number(tk.originalPrice) || Math.round(safePrice * 1.25);
 
                 return (
                   <div
@@ -992,10 +1020,10 @@ export default function MalaysiaHome({
                     <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
                       <div>
                         <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                          RM {origPrice.toLocaleString()}
+                          RM {(origPrice || 0).toLocaleString()}
                         </span>
                         <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                          RM {displayPrice.toLocaleString()}
+                          RM {(displayPrice || 0).toLocaleString()}
                           <span className="text-xs font-normal text-zinc-500"> / ticket</span>
                         </div>
                       </div>
@@ -1052,7 +1080,7 @@ export default function MalaysiaHome({
                     <div>
                       <span className="text-[11px] text-zinc-400 block">Private Vehicle From</span>
                       <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                        RM {tr.car.toLocaleString()}
+                        RM {(Number(tr.car) || 0).toLocaleString()}
                       </div>
                     </div>
                     <span className="text-xs font-bold text-emerald-700 inline-flex items-center">
@@ -1576,10 +1604,12 @@ export default function MalaysiaHome({
               <div className="flex gap-6 w-max gfk-marquee-track gfk-marquee-left-normal">
                 {[...filteredHotels, ...filteredHotels].map((ht, index) => {
                   const img = resolveImage(ht.image, 'hotel');
+                  const safePrice = Number(ht.price) || 0;
+                  const commPct = Number(currentAgent?.commission) || 0;
                   const displayPrice = currentAgent
-                    ? Math.round(ht.price * (1 - currentAgent.commission / 100))
-                    : ht.price;
-                  const origPrice = ht.originalPrice || Math.round(ht.price * 1.28);
+                    ? Math.round(safePrice * (1 - commPct / 100))
+                    : safePrice;
+                  const origPrice = Number(ht.originalPrice) || Math.round(safePrice * 1.28);
                   return (
                     <div
                       key={`${ht.id}-${index}`}
@@ -1612,10 +1642,10 @@ export default function MalaysiaHome({
                         <div className="mt-4 pt-3 border-t border-zinc-100 flex items-end justify-between">
                           <div>
                             <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                              RM {origPrice}
+                              RM {(origPrice || 0).toLocaleString()}
                             </span>
                             <span className="text-base font-extrabold text-zinc-950 tabular-nums">
-                              RM {displayPrice} <span className="text-xs font-normal text-zinc-500">/ night</span>
+                              RM {(displayPrice || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">/ night</span>
                             </span>
                           </div>
                           <span className="text-xs font-bold text-emerald-700">Book Room →</span>
@@ -1630,10 +1660,12 @@ export default function MalaysiaHome({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {filteredHotels.slice(0, 8).map((ht) => {
                 const img = resolveImage(ht.image, 'hotel');
+                const safePrice = Number(ht.price) || 0;
+                const commPct = Number(currentAgent?.commission) || 0;
                 const displayPrice = currentAgent
-                  ? Math.round(ht.price * (1 - currentAgent.commission / 100))
-                  : ht.price;
-                const origPrice = ht.originalPrice || Math.round(ht.price * 1.28);
+                  ? Math.round(safePrice * (1 - commPct / 100))
+                  : safePrice;
+                const origPrice = Number(ht.originalPrice) || Math.round(safePrice * 1.28);
 
                 return (
                   <div

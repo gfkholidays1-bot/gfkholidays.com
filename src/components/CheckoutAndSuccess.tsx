@@ -169,7 +169,7 @@ export function CheckoutForm({
                     <div className="text-xs">
                       <p className="font-bold text-zinc-900">Corporate Wallet Credit</p>
                       <p className="text-[0.68rem] text-zinc-500 font-semibold mt-1">
-                        Instant reservation settlement. Balance: RM {currentUser?.wallet.credit.toLocaleString()}
+                        Instant reservation settlement. Balance: RM {(Number(currentUser?.wallet?.credit) || 0).toLocaleString()}
                       </p>
                     </div>
                   </button>
@@ -257,19 +257,19 @@ export function CheckoutForm({
             <div className="space-y-3.5 text-xs font-semibold">
               <div className="flex justify-between text-zinc-500">
                 <span>Public Rate Subtotal</span>
-                <span>RM {(product.base_price * pax).toLocaleString()}</span>
+                <span>RM {((Number(product?.base_price) || 0) * pax).toLocaleString()}</span>
               </div>
 
               {userRole === 'agent' && commission > 0 && (
                 <div className="flex justify-between text-emerald-700">
                   <span>Special B2B Net Discount</span>
-                  <span>-RM {commission.toLocaleString()}</span>
+                  <span>-RM {(Number(commission) || 0).toLocaleString()}</span>
                 </div>
               )}
 
               <div className="pt-4 border-t border-zinc-150 flex justify-between items-center font-bold text-zinc-900">
                 <span className="text-sm">Total Charge</span>
-                <span className="text-xl tracking-tight">RM {total.toLocaleString()}</span>
+                <span className="text-xl tracking-tight">RM {(Number(total) || 0).toLocaleString()}</span>
               </div>
             </div>
 
@@ -277,7 +277,7 @@ export function CheckoutForm({
               <div className="pt-4 border-t border-zinc-150 text-center bg-zinc-50 p-3 rounded-xl">
                 <span className="text-[0.6rem] font-bold text-zinc-400 uppercase tracking-wider block">Charged to Agent Balance</span>
                 <span className="text-xs font-bold text-indigo-700 mt-1 block">
-                  Remaining Credit: RM {(currentUser.wallet.credit - total).toLocaleString()}
+                  Remaining Credit: RM {((Number(currentUser?.wallet?.credit) || 0) - (Number(total) || 0)).toLocaleString()}
                 </span>
               </div>
             )}
