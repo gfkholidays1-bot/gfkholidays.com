@@ -653,13 +653,25 @@ export default function HomepageCmsPanel({
 
             {firebaseTestResult && (
               <div
-                className={`p-3 rounded-xl border font-semibold ${
+                className={`p-3 rounded-xl border font-semibold space-y-2 ${
                   firebaseTestResult.writeOk
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                     : 'bg-amber-50 border-amber-200 text-amber-900'
                 }`}
               >
-                {firebaseTestResult.message}
+                <div>{firebaseTestResult.message}</div>
+                {firebaseTestResult.readQuotaBypassActive && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <a
+                      href={getFirebaseConsoleDatabaseUrl()}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 bg-emerald-800 hover:bg-emerald-900 text-white px-3 py-1.5 rounded-lg font-bold text-xs"
+                    >
+                      <span>Open Firebase Database Upgrade Dialog (50k Read Limit)</span>
+                    </a>
+                  </div>
+                )}
               </div>
             )}
 
@@ -667,11 +679,10 @@ export default function HomepageCmsPanel({
               <div className="bg-amber-50/90 border border-amber-300 rounded-xl p-3.5 text-amber-950 space-y-2">
                 <p className="font-black text-xs flex items-center gap-1.5">
                   <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
-                  Why changes on a static GitHub deployment aren&apos;t writing to Firebase right now (HTTP 429 Quota Exceeded):
+                  Firebase Free-Tier Quota Notice (HTTP 429):
                 </p>
                 <p className="text-amber-900 leading-relaxed">
-                  Google Cloud&apos;s free-tier database on project <code>{getActiveFirebaseConfig().projectId}</code> (<code>{getActiveFirebaseConfig().firestoreDatabaseId}</code>) has reached its <strong>20,000 free writes/day limit</strong> and is returning <code>HTTP 429: Quota exceeded for quota metric &apos;Free daily write units per project&apos;</code>.
-                  In AI Studio, all browsers automatically sync through our live Express server (<code>/api/cms</code>), while on static GitHub Pages there is no Express server so cross-browser sync depends on Firebase Firestore writes.
+                  Google Cloud&apos;s free-tier database on project <code>{getActiveFirebaseConfig().projectId}</code> (<code>{getActiveFirebaseConfig().firestoreDatabaseId}</code>) has reached a daily free-tier quota limit (<code>HTTP 429</code>). You can upgrade the database in Firebase Console or connect a fresh Firebase project below.
                 </p>
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <a
@@ -680,7 +691,7 @@ export default function HomepageCmsPanel({
                     rel="noreferrer"
                     className="inline-flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-white px-3 py-1.5 rounded-lg font-bold text-xs"
                   >
-                    <span>View Database Quota in Firebase Console</span>
+                    <span>View / Upgrade Database in Firebase Console</span>
                   </a>
                   <button
                     type="button"

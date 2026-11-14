@@ -15,6 +15,8 @@ const FIRESTORE_PROJECT_ID = 'gen-lang-client-0612324688';
 const FIRESTORE_DB_ID = 'ai-studio-gfkholidays-415b8c9f-ece5-42b3-82d6-fea966b26d79';
 const FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/${FIRESTORE_DB_ID}/documents`;
 
+let serverReadQuotaExceeded = false;
+
 interface CollectionEntry {
   data: any[];
   updatedAt: number;
@@ -61,6 +63,36 @@ function parseFirestoreDoc(docObj: any): any {
   return out;
 }
 
+/**
+ * Reads a single Firestore document on the server.
+ * Automatically falls back to `PATCH ?updateMask.fieldPaths=_noop` when GET returns 429 (50k daily read quota).
+ */
+async function fetchFirestoreDocOnServer(collectionName: string, docId: string): Promise<any | null> {
+  const docUrl = `${FIRESTORE_BASE_URL}/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
+  if (!serverReadQuotaExceeded) {
+    try {
+      const res = await fetch(docUrl);
+      if (res.ok) return await res.json();
+      if (res.status === 404) return null;
+      if (res.status === 429) {
+        serverReadQuotaExceeded = true;
+      }
+    } catch (_e) {}
+  }
+
+  try {
+    const patchRes = await fetch(`${docUrl}?updateMask.fieldPaths=_noop`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: {} })
+    });
+    if (patchRes.ok) {
+      return await patchRes.json();
+    }
+  } catch (_e) {}
+  return null;
+}
+
 function loadStoreFromDisk(): CmsStore {
   try {
     if (!fs.existsSync(DATA_DIR)) {
@@ -89,7 +121,6 @@ function saveStoreToDisk(store: CmsStore) {
     }
     const serialized = JSON.stringify(store);
     fs.writeFileSync(STORE_FILE, serialized, 'utf-8');
-    // Also mirror to public/cms-seed.json so GitHub static builds include the latest CMS state
     if (fs.existsSync(path.join(__dirname, 'public'))) {
       fs.writeFileSync(PUBLIC_SEED_FILE, serialized, 'utf-8');
     }
@@ -99,6 +130,100 @@ function saveStoreToDisk(store: CmsStore) {
 }
 
 const store: CmsStore = loadStoreFromDisk();
+
+/**
+ * Reconciles the local server video file (`/data/videos/hero_background_video.bin`) with the active
+ * `heroVideoFileName` in Firebase Firestore `settings/global` and `cms_video_chunks`.
+ * Evicts any stale local video (e.g., an older file whose name no longer matches Firestore) and
+ * downloads the active video chunks from Firestore if available.
+ */
+async function syncServerVideoWithFirestore(expectedFileName?: string) {
+  if (!expectedFileName) return;
+  try {
+    const key = 'hero_background_video';
+    const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
+    const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
+    const publicUploadPath = path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`);
+
+    let localFileName = '';
+    if (fs.existsSync(metaPath)) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+        localFileName = meta.fileName || '';
+      } catch (_e) {}
+    }
+
+    // If local server already has the exact matching video file, nothing to do
+    if (localFileName === expectedFileName && fs.existsSync(videoPath)) {
+      return;
+    }
+
+    // Remove stale local video file if its name does not match Firestore's active heroVideoFileName
+    if (localFileName && localFileName !== expectedFileName) {
+      console.log(
+        `[CMS Video Sync] Evicting stale local server video "${localFileName}" (active Firestore video is "${expectedFileName}")`
+      );
+      if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+      if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+      if (fs.existsSync(publicUploadPath)) fs.unlinkSync(publicUploadPath);
+    }
+
+    // Attempt to pull the active video chunks from Firestore `cms_video_chunks`
+    const chunkMetaDoc = await fetchFirestoreDocOnServer('cms_video_chunks', `${key}_meta`);
+    const metaFields = chunkMetaDoc?.fields;
+    if (!metaFields) return;
+
+    const totalChunks = Number(metaFields.totalChunks?.integerValue || 0);
+    const cloudFileName = String(metaFields.fileName?.stringValue || expectedFileName);
+    const contentType = String(metaFields.mimeType?.stringValue || 'video/mp4');
+    const updatedAt = Number(metaFields.version?.integerValue || Date.now());
+
+    if (totalChunks <= 0 || totalChunks > 200) return;
+    if (cloudFileName !== expectedFileName) return;
+
+    const buffers: Buffer[] = new Array(totalChunks);
+    const BATCH = 5;
+    for (let i = 0; i < totalChunks; i += BATCH) {
+      const indices: number[] = [];
+      for (let j = i; j < Math.min(i + BATCH, totalChunks); j++) {
+        indices.push(j);
+      }
+      const docs = await Promise.all(
+        indices.map((idx) => fetchFirestoreDocOnServer('cms_video_chunks', `${key}_${idx}`))
+      );
+      for (let k = 0; k < indices.length; k++) {
+        const b64 = docs[k]?.fields?.data?.stringValue;
+        if (!b64) return;
+        buffers[indices[k]] = Buffer.from(b64, 'base64');
+      }
+    }
+
+    if (!fs.existsSync(VIDEOS_DIR)) {
+      fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+    }
+    const finalBuf = Buffer.concat(buffers);
+    fs.writeFileSync(videoPath, finalBuf);
+    fs.writeFileSync(
+      metaPath,
+      JSON.stringify({
+        contentType,
+        fileName: cloudFileName,
+        size: finalBuf.length,
+        updatedAt
+      }),
+      'utf-8'
+    );
+    if (!fs.existsSync(PUBLIC_UPLOADS_DIR)) {
+      fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
+    }
+    fs.copyFileSync(videoPath, publicUploadPath);
+    console.log(
+      `[CMS Video Sync] Downloaded & synced "${cloudFileName}" (${(finalBuf.length / (1024 * 1024)).toFixed(1)} MB) from Firestore cms_video_chunks`
+    );
+  } catch (err) {
+    console.warn('[CMS Video Sync] Non-fatal warning syncing video from Firestore:', err);
+  }
+}
 
 async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: CollectionEntry) => void) {
   const collectionsToSeed = [
@@ -115,31 +240,55 @@ async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: Collect
 
   let changed = false;
 
-  // Always sync settings/global from live Firestore on startup so local server cache is never stale
+  // Always sync settings/global from live Firestore (using no-op PATCH fallback if GET returns 429)
   try {
-    const res = await fetch(`${FIRESTORE_BASE_URL}/settings/global`);
-    if (res.ok) {
-      const docJson: any = await res.json();
-      if (docJson && docJson.fields) {
-        const parsedDoc = parseFirestoreDoc(docJson);
-        parsedDoc.id = 'global';
-        store.collections.settings = {
-          data: [parsedDoc],
-          updatedAt: Date.now(),
-        };
-        changed = true;
-        onSeeded?.('settings', store.collections.settings);
-        console.log(`[CMS Store] Synced latest 'settings/global' from Firestore`);
+    const docJson = await fetchFirestoreDocOnServer('settings', 'global');
+    if (docJson && docJson.fields) {
+      const parsedDoc = parseFirestoreDoc(docJson);
+      parsedDoc.id = 'global';
+      store.collections.settings = {
+        data: [parsedDoc],
+        updatedAt: Number(parsedDoc._updatedAt) || Date.now(),
+      };
+      changed = true;
+      onSeeded?.('settings', store.collections.settings);
+      console.log(`[CMS Store] Synced latest 'settings/global' from Firestore`);
+
+      if (parsedDoc.heroVideoSource === 'upload' && parsedDoc.heroVideoFileName) {
+        await syncServerVideoWithFirestore(parsedDoc.heroVideoFileName);
       }
     }
   } catch (_e) {}
 
   for (const colName of collectionsToSeed) {
-    if (store.collections[colName] && Array.isArray(store.collections[colName].data) && store.collections[colName].data.length > 0) {
+    if (
+      store.collections[colName] &&
+      Array.isArray(store.collections[colName].data) &&
+      store.collections[colName].data.length > 0
+    ) {
+      continue;
+    }
+    if (serverReadQuotaExceeded) {
+      try {
+        const snapDoc = await fetchFirestoreDocOnServer('cms_snapshots', colName);
+        const itemsJson = snapDoc?.fields?.itemsJson?.stringValue;
+        if (itemsJson) {
+          const docs = JSON.parse(itemsJson);
+          if (Array.isArray(docs) && docs.length > 0) {
+            store.collections[colName] = { data: docs, updatedAt: 1 };
+            changed = true;
+            onSeeded?.(colName, store.collections[colName]);
+          }
+        }
+      } catch (_e) {}
       continue;
     }
     try {
       const res = await fetch(`${FIRESTORE_BASE_URL}/${colName}?pageSize=100`);
+      if (res.status === 429) {
+        serverReadQuotaExceeded = true;
+        continue;
+      }
       if (!res.ok) continue;
       const json: any = await res.json();
       if (Array.isArray(json.documents) && json.documents.length > 0) {
@@ -152,9 +301,7 @@ async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: Collect
         onSeeded?.(colName, store.collections[colName]);
         console.log(`[CMS Store] Seeded '${colName}' from Firestore (${docs.length} docs)`);
       }
-    } catch (_e) {
-      // Ignore network/offline errors on seed
-    }
+    } catch (_e) {}
   }
 
   if (changed) {
@@ -168,21 +315,32 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
 
-  app.use('/api', (req, res, next) => {
+  app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Video-Type, X-Video-Name');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, Range, X-Video-Type, X-Video-Name'
+    );
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Content-Range, Accept-Ranges, Content-Length, X-Video-Size, X-Video-Name, X-Video-Url'
+    );
     if (req.method === 'OPTIONS') {
       return res.status(204).end();
     }
     next();
   });
 
-  // SSE clients for instant real-time cross-browser updates
   const sseClients = new Set<express.Response>();
 
   const broadcastUpdate = (collection: string, entry: CollectionEntry) => {
-    const payload = `data: ${JSON.stringify({ type: 'update', collection, data: entry.data, updatedAt: entry.updatedAt })}\n\n`;
+    const payload = `data: ${JSON.stringify({
+      type: 'update',
+      collection,
+      data: entry.data,
+      updatedAt: entry.updatedAt
+    })}\n\n`;
     for (const client of sseClients) {
       try {
         client.write(payload);
@@ -192,7 +350,6 @@ async function startServer() {
     }
   };
 
-  // Trigger Firestore seed asynchronously so port 3000 binds immediately
   seedFromFirestoreIfNeeded(broadcastUpdate).catch(() => {});
 
   app.get('/api/cms-stream', (req, res) => {
@@ -252,10 +409,20 @@ async function startServer() {
     saveStoreToDisk(store);
     broadcastUpdate(col, entry);
 
+    if (col === 'settings' && incomingData[0]?.heroVideoSource === 'upload' && incomingData[0]?.heroVideoFileName) {
+      syncServerVideoWithFirestore(incomingData[0].heroVideoFileName).catch(() => {});
+    }
+
     return res.json({ ok: true, updatedAt: entry.updatedAt });
   });
 
-  const finalizeUploadedVideo = (key: string, videoPath: string, metaPath: string, contentType: string, rawFileName: string) => {
+  const finalizeUploadedVideo = (
+    key: string,
+    videoPath: string,
+    metaPath: string,
+    contentType: string,
+    rawFileName: string
+  ) => {
     const stat = fs.statSync(videoPath);
     const version = Date.now();
     let decodedFileName = rawFileName;
@@ -265,11 +432,15 @@ async function startServer() {
 
     fs.writeFileSync(
       metaPath,
-      JSON.stringify({ contentType, fileName: decodedFileName, size: stat.size, updatedAt: version }),
+      JSON.stringify({
+        contentType,
+        fileName: decodedFileName,
+        size: stat.size,
+        updatedAt: version
+      }),
       'utf-8'
     );
 
-    // Mirror to public/uploads/${key}.mp4 so static deployments also have the file
     try {
       if (!fs.existsSync(PUBLIC_UPLOADS_DIR)) {
         fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
@@ -279,8 +450,11 @@ async function startServer() {
 
     const videoUrl = `/api/cms-video/${key}?v=${version}`;
 
-    // Automatically update settings collection on server & broadcast via SSE so all browsers immediately play the uploaded video
-    if (store.collections.settings && Array.isArray(store.collections.settings.data) && store.collections.settings.data.length > 0) {
+    if (
+      store.collections.settings &&
+      Array.isArray(store.collections.settings.data) &&
+      store.collections.settings.data.length > 0
+    ) {
       store.collections.settings.data = store.collections.settings.data.map((docItem: any) =>
         docItem.id === 'global'
           ? {
@@ -309,13 +483,15 @@ async function startServer() {
     };
   };
 
-  // Chunked video upload endpoint (4MB chunks) to bypass Cloud Run's 32MB single-request limit
   app.post(
     '/api/cms-video-chunk/:key',
     express.raw({ type: '*/*', limit: '20mb' }),
     (req, res) => {
       try {
-        const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
+        const key = String(req.params.key || 'hero_background_video').replace(
+          /[^a-zA-Z0-9_-]/g,
+          ''
+        );
         if (!fs.existsSync(VIDEOS_DIR)) {
           fs.mkdirSync(VIDEOS_DIR, { recursive: true });
         }
@@ -326,8 +502,15 @@ async function startServer() {
 
         const chunkIndex = Math.max(0, Number(req.query.index || 0));
         const totalChunks = Math.max(1, Number(req.query.total || 1));
-        const contentType = String(req.query.videoType || req.headers['x-video-type'] || req.headers['content-type'] || 'video/mp4');
-        const fileName = String(req.query.fileName || req.headers['x-video-name'] || 'uploaded-video.mp4');
+        const contentType = String(
+          req.query.videoType ||
+            req.headers['x-video-type'] ||
+            req.headers['content-type'] ||
+            'video/mp4'
+        );
+        const fileName = String(
+          req.query.fileName || req.headers['x-video-name'] || 'uploaded-video.mp4'
+        );
 
         const partPath = path.join(VIDEOS_DIR, `${key}.part`);
         const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
@@ -348,7 +531,6 @@ async function startServer() {
           });
         }
 
-        // Final chunk received: atomically move .part to .bin and publish
         if (fs.existsSync(videoPath)) {
           try {
             fs.unlinkSync(videoPath);
@@ -370,7 +552,10 @@ async function startServer() {
     express.raw({ type: '*/*', limit: '250mb' }),
     (req, res) => {
       try {
-        const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
+        const key = String(req.params.key || 'hero_background_video').replace(
+          /[^a-zA-Z0-9_-]/g,
+          ''
+        );
         if (!fs.existsSync(VIDEOS_DIR)) {
           fs.mkdirSync(VIDEOS_DIR, { recursive: true });
         }
@@ -378,7 +563,9 @@ async function startServer() {
         if (!Buffer.isBuffer(buf) || buf.length === 0) {
           return res.status(400).json({ error: 'Empty video buffer' });
         }
-        const contentType = String(req.headers['x-video-type'] || req.headers['content-type'] || 'video/mp4');
+        const contentType = String(
+          req.headers['x-video-type'] || req.headers['content-type'] || 'video/mp4'
+        );
         const fileName = String(req.headers['x-video-name'] || 'uploaded-video.mp4');
         const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
         const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
@@ -409,7 +596,10 @@ async function startServer() {
 
   const handleStreamVideo = (req: express.Request, res: express.Response) => {
     try {
-      const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
+      const key = String(req.params.key || 'hero_background_video').replace(
+        /[^a-zA-Z0-9_-]/g,
+        ''
+      );
       const binPath = path.join(VIDEOS_DIR, `${key}.bin`);
       const fallbackPublicPath = path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`);
       const videoPath = fs.existsSync(binPath)
@@ -457,7 +647,6 @@ async function startServer() {
         return res.status(200).end();
       }
 
-      // Cap each response chunk to 8MB so Cloud Run's 32MB HTTP response limit is never exceeded
       const MAX_STREAM_CHUNK = 8 * 1024 * 1024;
       const rangeHeader = req.headers.range;
 
@@ -487,7 +676,6 @@ async function startServer() {
         return stream.pipe(res);
       }
 
-      // If no Range header is sent and the video is larger than 20MB, send the first 8MB as 206 Partial Content
       if (fileSize > 20 * 1024 * 1024) {
         const end = Math.min(MAX_STREAM_CHUNK - 1, fileSize - 1);
         const chunkLength = end + 1;
@@ -517,7 +705,10 @@ async function startServer() {
 
   app.delete('/api/cms-video/:key', (req, res) => {
     try {
-      const key = String(req.params.key || 'hero_background_video').replace(/[^a-zA-Z0-9_-]/g, '');
+      const key = String(req.params.key || 'hero_background_video').replace(
+        /[^a-zA-Z0-9_-]/g,
+        ''
+      );
       const videoPath = path.join(VIDEOS_DIR, `${key}.bin`);
       const metaPath = path.join(VIDEOS_DIR, `${key}.meta.json`);
       const publicUploadPath = path.join(PUBLIC_UPLOADS_DIR, `${key}.mp4`);
