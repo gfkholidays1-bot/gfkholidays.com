@@ -740,7 +740,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="flex-grow w-full max-w-full overflow-x-clip pt-16 md:pt-20 pb-16 md:pb-0 flex flex-col">
+      <main className="flex-grow w-full max-w-full overflow-x-clip pt-[calc(68px+env(safe-area-inset-top,0px))] lg:pt-20 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:pb-0 flex flex-col">
         {/* Path: HOME — Flagship Malaysia B2C Experience & Activities Hub */}
         {currentPath === '/' && (
           <MalaysiaHome

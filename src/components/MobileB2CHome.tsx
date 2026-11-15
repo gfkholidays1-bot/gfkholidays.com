@@ -597,12 +597,12 @@ export default function MobileB2CHome({
 
       {/* =====================================================================
           2. FULL-BLEED BACKGROUND VIDEO HERO WITH EXPLORE TRAVEL SERVICES OVERLAY
-          (Aligned with Live Desktop Website)
+          (iPhone svh-fitted so full video + 8 service cards fit cleanly on screen)
       ===================================================================== */}
       <section
         id="mobile-hero-section"
         data-aistudio-editable="true"
-        className="relative w-full overflow-hidden bg-zinc-950 text-white"
+        className="relative w-full min-h-[calc(100svh-134px-env(safe-area-inset-bottom,0px))] flex flex-col justify-between overflow-hidden bg-zinc-950 text-white"
       >
         {/* Full-Bleed Looping Video Backdrop + 0ms Poster Frame */}
         <div
@@ -695,66 +695,68 @@ export default function MobileB2CHome({
           <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/35 via-zinc-950/10 to-zinc-950/45 pointer-events-none" />
         </div>
 
-        {/* Foreground Content Over Background Video */}
-        <div className="relative z-20 px-3.5 pt-4 pb-5 space-y-3.5">
-          <div>
-            <p className="text-[10px] font-bold text-emerald-300 tracking-wide uppercase drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
-              {globalSettings.heroBadgeText || 'Licensed Malaysia Destination Operator'}
-            </p>
-            <h1 className="text-white text-xl font-extrabold tracking-tight leading-[1.15] mt-1 drop-shadow-[0_2px_8px_rgba(0,0,0,0.75)]">
-              <span className="font-serif italic font-semibold text-amber-300 block">
-                {globalSettings.heroTitleLine1 || 'Experience Truly Asia:'}
-              </span>
-              {globalSettings.heroTitleLine2 || "Malaysia's Finest Tours, Activities & Stays."}
-            </h1>
-          </div>
+        {/* Foreground Content Over Background Video (Balanced top-to-bottom iPhone fit) */}
+        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-3.5 pb-4 gap-3">
+          <div className="space-y-2.5">
+            <div>
+              <p className="text-[10px] font-bold text-emerald-300 tracking-wide uppercase drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
+                {globalSettings.heroBadgeText || 'Licensed Malaysia Destination Operator'}
+              </p>
+              <h1 className="text-white text-[19px] sm:text-xl font-extrabold tracking-tight leading-[1.14] mt-0.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.75)]">
+                <span className="font-serif italic font-semibold text-amber-300 block">
+                  {globalSettings.heroTitleLine1 || 'Experience Truly Asia:'}
+                </span>
+                {globalSettings.heroTitleLine2 || "Malaysia's Finest Tours, Activities & Stays."}
+              </h1>
+            </div>
 
-          {/* Search Input (Excludes Flight Fares — packages, hotels & attractions only) */}
-          <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-2">
-            <form
-              onSubmit={handleSearchSubmit}
-              className="bg-white rounded-xl p-1 shadow-lg border border-white/30 flex items-center gap-1.5"
-            >
-              <div className="flex-1 flex items-center gap-2 px-2.5 py-1">
-                <Search className="w-4 h-4 text-emerald-700 shrink-0" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Tours, hotels, attraction tickets in Malaysia..."
-                  className="w-full text-xs font-semibold text-zinc-900 bg-transparent focus:outline-none placeholder-zinc-400"
-                />
-              </div>
-              <button
-                type="submit"
-                className="bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-2 rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer"
+            {/* Search Input (Excludes Flight Fares — packages, hotels & attractions only) */}
+            <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-1.5">
+              <form
+                onSubmit={handleSearchSubmit}
+                className="bg-white rounded-xl p-1 shadow-lg border border-white/30 flex items-center gap-1.5"
               >
-                Explore
-              </button>
-            </form>
-
-            <div className="flex items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 no-scrollbar">
-              {quickLocations.map((loc) => (
+                <div className="flex-1 flex items-center gap-2 px-2 py-0.5">
+                  <Search className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Tours, hotels, attraction tickets..."
+                    className="w-full text-xs font-semibold text-zinc-900 bg-transparent focus:outline-none placeholder-zinc-400"
+                  />
+                </div>
                 <button
-                  key={loc.id}
-                  type="button"
-                  onClick={() => setSelectedLocation(loc.id)}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap border ${
-                    selectedLocation === loc.id
-                      ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
-                      : 'bg-zinc-950/45 text-white border-white/25 hover:bg-zinc-900/60 backdrop-blur-md'
-                  }`}
+                  type="submit"
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer"
                 >
-                  {loc.label}
+                  Explore
                 </button>
-              ))}
+              </form>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 no-scrollbar">
+                {quickLocations.map((loc) => (
+                  <button
+                    key={loc.id}
+                    type="button"
+                    onClick={() => setSelectedLocation(loc.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[10.5px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap border ${
+                      selectedLocation === loc.id
+                        ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
+                        : 'bg-zinc-950/45 text-white border-white/25 hover:bg-zinc-900/60 backdrop-blur-md'
+                    }`}
+                  >
+                    {loc.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO */}
-          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-1">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-[11px] font-extrabold uppercase tracking-wider text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-0.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <h2 className="text-[10.5px] font-extrabold uppercase tracking-wider text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
                 Explore Travel Services
               </h2>
               <span className="text-[10px] font-bold text-amber-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
@@ -762,11 +764,11 @@ export default function MobileB2CHome({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
                 onClick={() => onNavigate('/search', { category: 'Packages' })}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-amber-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-amber-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
               >
                 <div className="w-8 h-8 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0">
                   <Palmtree className="w-4 h-4 stroke-[2.2]" />
@@ -785,7 +787,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/hotels')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-emerald-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-emerald-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
               >
                 <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
                   <Building2 className="w-4 h-4 stroke-[2.2]" />
@@ -804,7 +806,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/tickets')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-purple-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-purple-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
               >
                 <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
                   <Ticket className="w-4 h-4 stroke-[2.2]" />
@@ -823,7 +825,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/flights')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-sky-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-sky-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
               >
                 <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0">
                   <Plane className="w-4 h-4 stroke-[2.2]" />
@@ -842,7 +844,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/transport')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-blue-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-blue-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
               >
                 <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
                   <Car className="w-4 h-4 stroke-[2.2]" />
@@ -861,7 +863,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/restaurants')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-rose-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-rose-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
               >
                 <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
                   <UtensilsCrossed className="w-4 h-4 stroke-[2.2]" />
@@ -879,7 +881,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/cruises')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-teal-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[56px] min-w-0"
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-teal-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px] min-w-0"
               >
                 <div className="w-8 h-8 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0">
                   <Waves className="w-4 h-4 stroke-[2.2]" />
@@ -898,7 +900,7 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/marketplaces')}
-                className="bg-emerald-950/75 hover:bg-emerald-900/85 backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[56px] min-w-0"
+                className="bg-emerald-950/75 hover:bg-emerald-900/85 backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px] min-w-0"
               >
                 <div className="w-8 h-8 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0">
                   <Globe className="w-4 h-4 stroke-[2.2]" />

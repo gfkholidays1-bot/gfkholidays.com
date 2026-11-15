@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type CSSProperties } from 'react';
 import { Menu, X, Briefcase, Users, LogOut, ChevronRight, Globe } from 'lucide-react';
 import { Agent } from '../types';
 import { useCurrencyRate, SUPPORTED_CURRENCIES } from '../lib/currency';
@@ -99,13 +99,13 @@ export default function Header({
   }, []);
 
   return (
-    <header className="fixed w-full max-w-[100vw] overflow-x-clip top-0 z-50 bg-white/95 backdrop-blur-xl border-b border-transparent">
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-2 sm:gap-4 md:gap-8 h-16 md:h-20">
-          {/* Zone 1: Brand Wordmark & Official Logo (Responsive mobile fit) */}
+    <header className="fixed w-full max-w-[100vw] overflow-x-clip top-0 z-50 bg-white/95 backdrop-blur-xl border-b border-zinc-100 pt-[env(safe-area-inset-top,0px)]">
+      <div className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-8">
+        <div className="flex items-center justify-between gap-2 sm:gap-3 lg:gap-5 h-[68px] lg:h-20">
+          {/* Zone 1: Brand Wordmark & Official Logo (Larger on Mobile, Protected on Laptop/Desktop) */}
           <div
             onClick={() => handleNavClick('/')}
-            className="flex items-center gap-2 sm:gap-3 cursor-pointer group min-w-0 flex-1 md:flex-initial select-none py-1"
+            className="flex items-center gap-2 sm:gap-2.5 lg:gap-3 cursor-pointer group min-w-0 flex-1 lg:flex-initial lg:shrink-0 select-none py-1"
           >
             <img
               src={logoSettings.url}
@@ -117,20 +117,26 @@ export default function Header({
               }}
               alt="GFK Holidays Logo"
               referrerPolicy="no-referrer"
-              style={{
-                height: `${logoSettings.height}px`
-              }}
-              className="w-auto max-h-9 sm:max-h-14 md:max-h-[72px] max-w-[100px] sm:max-w-[220px] md:max-w-[320px] object-contain shrink-0 transition-transform duration-200 group-hover:scale-102 bg-transparent"
+              style={
+                {
+                  '--gfk-logo-h': `${Math.min(Math.max(Number(logoSettings.height) || 54, 44), 62)}px`
+                } as CSSProperties
+              }
+              className={`w-auto h-12 sm:h-[52px] lg:h-[var(--gfk-logo-h)] max-h-12 sm:max-h-[54px] lg:max-h-[62px] object-contain shrink-0 transition-transform duration-200 group-hover:scale-102 bg-transparent ${
+                logoSettings.showBrandText
+                  ? 'max-w-[130px] sm:max-w-[180px] lg:max-w-[170px] xl:max-w-[210px]'
+                  : 'max-w-[185px] sm:max-w-[240px] lg:max-w-[220px] xl:max-w-[260px]'
+              }`}
             />
             {logoSettings.showBrandText && (
-              <span className="text-base sm:text-2xl md:text-3xl font-black tracking-tight text-zinc-950 group-hover:text-emerald-700 transition-colors truncate min-w-0">
+              <span className="text-[17px] sm:text-xl lg:text-[21px] xl:text-2xl font-black tracking-tight text-zinc-950 group-hover:text-emerald-700 transition-colors truncate whitespace-nowrap min-w-0">
                 GFK Holidays
               </span>
             )}
           </div>
 
           {/* Zone 2: Concise Single-Line Navigation Links (Smooth-Scrolls to Home Sections) */}
-          <nav className="hidden md:flex items-center gap-7 text-sm font-semibold text-zinc-600">
+          <nav className="hidden lg:flex items-center gap-4 xl:gap-7 text-[13px] xl:text-sm font-semibold text-zinc-600 shrink-0">
             <a
               href={`/#${HOME_SECTIONS.packages}`}
               onClick={(e) => {
@@ -188,7 +194,7 @@ export default function Header({
           </nav>
 
           {/* Zone 3: Auto-Detected Regional Currency Indicator + Primary Action */}
-          <div className="hidden md:flex items-center gap-2.5 shrink-0">
+          <div className="hidden lg:flex items-center gap-2 shrink-0">
             <div
               className="flex items-center gap-1.5 bg-zinc-100 border border-zinc-200 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold text-zinc-800 whitespace-nowrap"
               title={`Prices automatically localized for ${geoInfo.countryName || geoInfo.countryCode}`}
@@ -244,10 +250,10 @@ export default function Header({
             )}
           </div>
 
-          {/* Mobile Right Regional Currency + Action & Menu Button */}
-          <div className="flex items-center gap-1 sm:gap-1.5 md:hidden shrink-0">
+          {/* Mobile & Compact Tablet Right Regional Currency + Action & Menu Button */}
+          <div className="flex items-center gap-1 sm:gap-1.5 lg:hidden shrink-0">
             <span
-              className="px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-900 text-[10px] sm:text-[11px] font-extrabold whitespace-nowrap inline-flex items-center gap-1"
+              className="px-1.5 sm:px-2 py-1 rounded-lg sm:rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-900 text-[10px] sm:text-[11px] font-extrabold whitespace-nowrap inline-flex items-center gap-1"
               title={`Region: ${geoInfo.countryName || geoInfo.countryCode}`}
             >
               <span>{geoInfo.countryCode || 'IN'}</span>
@@ -258,7 +264,7 @@ export default function Header({
               <button
                 type="button"
                 onClick={() => (onRequestLogin ? onRequestLogin('customer') : onLoginAs('customer'))}
-                className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+                className="bg-emerald-700 hover:bg-emerald-800 text-white px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
               >
                 <span>Login</span>
               </button>
@@ -269,7 +275,7 @@ export default function Header({
             )}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="text-zinc-900 p-2 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors cursor-pointer"
+              className="text-zinc-900 p-1.5 sm:p-2 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors cursor-pointer"
               aria-label="Toggle navigation menu"
             >
               {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -278,9 +284,9 @@ export default function Header({
         </div>
       </div>
 
-      {/* Mobile Menu Panel (Notice: NO Admin Panel link — Admin is strictly /admin via URL) */}
+      {/* Mobile & Tablet Menu Panel (Notice: NO Admin Panel link — Admin is strictly /admin via URL) */}
       {mobileMenuOpen && (
-        <div className="md:hidden bg-white border-t border-zinc-200 absolute w-full shadow-xl">
+        <div className="lg:hidden bg-white border-t border-zinc-200 absolute w-full shadow-xl max-h-[calc(100svh-72px)] overflow-y-auto">
           <div className="p-4 space-y-1.5">
             <button
               onClick={() => handleNavClick('/')}
