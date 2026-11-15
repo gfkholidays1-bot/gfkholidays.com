@@ -308,7 +308,71 @@ export default function MalaysiaHome({
 
   // Priority Malaysia Activities & Packages state
   const [selectedLocation, setSelectedLocation] = useState<string>('ALL');
+  const [selectedQuickCategory, setSelectedQuickCategory] = useState<string>('ALL');
   const [activeDesktopTab, setActiveDesktopTab] = useState<'all' | 'flights' | 'packages' | 'tickets' | 'hotels'>('all');
+
+  const quickCategoryOptions: Array<{
+    id: string;
+    label: string;
+    targetId: string;
+    keywords: string[];
+  }> = [
+    { id: 'ALL', label: 'All Experiences', targetId: HOME_SECTIONS.packages, keywords: [] },
+    {
+      id: 'luxury',
+      label: 'Luxury Escapes',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['luxury', '5-star', '5 star', 'resort', 'villa', 'yacht', 'ritz', 'four seasons', 'mandarin', 'shangri', 'private']
+    },
+    {
+      id: 'family',
+      label: 'Family Fun',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['family', 'theme park', 'lagoon', 'skyworlds', 'aquaria', 'zoo', 'genting', 'sunway', 'cameron']
+    },
+    {
+      id: 'adventure',
+      label: 'Adventure',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['adventure', 'kinabalu', 'island', 'semporna', 'mabul', 'skybridge', 'sabah', 'langkawi', 'caves', 'cable']
+    },
+    {
+      id: 'transfers',
+      label: 'Private Transfers',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['transfer', 'chauffeur', 'klia', 'private', 'van', 'mpv']
+    },
+    {
+      id: 'attractions',
+      label: 'Attraction Tickets',
+      targetId: HOME_SECTIONS.tickets,
+      keywords: ['ticket', 'pass', 'tower', 'sky', 'park', 'cable']
+    },
+    {
+      id: 'hotels',
+      label: 'Hotels & Resorts',
+      targetId: HOME_SECTIONS.hotels,
+      keywords: ['hotel', 'resort', '5-star', '4-star', 'suite']
+    },
+    {
+      id: 'dining',
+      label: 'Dining',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['dining', 'food', 'dinner', 'michelin', 'restaurant', 'cruise', 'penang']
+    }
+  ];
+
+  const handleSelectQuickCategory = (catId: string) => {
+    setSelectedQuickCategory(catId);
+    const chosen = quickCategoryOptions.find((c) => c.id === catId);
+    const targetSection = chosen?.targetId || HOME_SECTIONS.packages;
+    if (catId === 'hotels') setActiveDesktopTab('hotels');
+    else if (catId === 'attractions') setActiveDesktopTab('tickets');
+    else setActiveDesktopTab('packages');
+    requestAnimationFrame(() => {
+      scrollToHomeSection(targetSection, false);
+    });
+  };
 
   const scrollToDesktopSection = (tabId: 'all' | 'flights' | 'packages' | 'tickets' | 'hotels', targetId: string) => {
     setActiveDesktopTab(tabId);
@@ -406,25 +470,48 @@ export default function MalaysiaHome({
     { id: 'Melaka', label: 'Melaka' }
   ];
 
-  // Filter packages & tickets by selectedLocation
+  // Filter packages, tickets & hotels by selectedLocation + selectedQuickCategory
   const matchesLocation = (text?: string) => {
     if (selectedLocation === 'ALL') return true;
     if (!text) return false;
     return text.toLowerCase().includes(selectedLocation.toLowerCase());
   };
 
-  const filteredPackages = packages.filter(
+  const matchesQuickCategory = (haystack: string) => {
+    if (selectedQuickCategory === 'ALL' || selectedQuickCategory === 'attractions' || selectedQuickCategory === 'hotels') {
+      return true;
+    }
+    const activeCat = quickCategoryOptions.find((c) => c.id === selectedQuickCategory);
+    if (!activeCat || activeCat.keywords.length === 0) return true;
+    const lower = haystack.toLowerCase();
+    return activeCat.keywords.some((kw) => lower.includes(kw));
+  };
+
+  const locationPackages = packages.filter(
     (p) => matchesLocation(p.destination) || matchesLocation(p.title)
   );
-  const filteredTickets = tickets.filter(
+  const categoryMatchedPackages = locationPackages.filter((p) =>
+    matchesQuickCategory(`${p.title} ${p.description} ${p.category} ${(p.tags || []).join(' ')} ${p.destination}`)
+  );
+  const filteredPackages = categoryMatchedPackages.length > 0 ? categoryMatchedPackages : locationPackages;
+
+  const locationTickets = tickets.filter(
     (t) => matchesLocation(t.location) || matchesLocation(t.name)
   );
+  const categoryMatchedTickets = locationTickets.filter((t) =>
+    matchesQuickCategory(`${t.name} ${t.category || ''} ${t.location || ''} ${t.info || ''}`)
+  );
+  const filteredTickets = categoryMatchedTickets.length > 0 ? categoryMatchedTickets : locationTickets;
 
   // Filtered hotels for Direct Hotel Contracts section
-  const filteredHotels = hotels.filter((h) => {
+  const baseHotels = hotels.filter((h) => {
     if (hotelCategoryFilter === 'ALL') return true;
     return h.cat === hotelCategoryFilter;
   });
+  const categoryMatchedHotels = baseHotels.filter((h) =>
+    matchesQuickCategory(`${h.name} ${h.cat} ${h.location || ''} ${h.instructions || ''}`)
+  );
+  const filteredHotels = categoryMatchedHotels.length > 0 ? categoryMatchedHotels : baseHotels;
 
   // Marquee class computation based on Admin Portal settings
   const speed = settings.mediaAnimationSpeed || 'normal';
@@ -703,8 +790,7 @@ export default function MalaysiaHome({
                 type="button"
                 onClick={() => {
                   setSelectedLocation(loc.id);
-                  const el = document.getElementById('malaysia-priority-catalog');
-                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  scrollToHomeSection(HOME_SECTIONS.packages, false);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   selectedLocation === loc.id
@@ -713,6 +799,27 @@ export default function MalaysiaHome({
                 }`}
               >
                 {loc.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Quick Category Filter & Smooth Scroll Chips Beneath Search */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-amber-300 mr-1">
+              Quick Category:
+            </span>
+            {quickCategoryOptions.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => handleSelectQuickCategory(cat.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0 border ${
+                  selectedQuickCategory === cat.id
+                    ? 'bg-amber-400 text-zinc-950 border-amber-300 shadow-sm'
+                    : 'bg-white/10 hover:bg-white/20 text-white border-white/25'
+                }`}
+              >
+                {cat.label}
               </button>
             ))}
           </div>
@@ -1122,23 +1229,91 @@ export default function MalaysiaHome({
           </button>
         </div>
 
-        {/* Interactive Location Filter Bar */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-4 mb-8">
-          {malaysiaLocations.map((loc) => (
-            <button
-              key={loc.id}
-              type="button"
-              onClick={() => setSelectedLocation(loc.id)}
-              className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                selectedLocation === loc.id
-                  ? 'bg-zinc-950 text-white'
-                  : 'bg-white text-zinc-600 hover:bg-zinc-100 border border-zinc-200'
-              }`}
-            >
-              {loc.label}
-            </button>
-          ))}
+        {/* Interactive Location + Quick Category Filter Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-6">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {malaysiaLocations.map((loc) => (
+              <button
+                key={loc.id}
+                type="button"
+                onClick={() => setSelectedLocation(loc.id)}
+                className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  selectedLocation === loc.id
+                    ? 'bg-zinc-950 text-white'
+                    : 'bg-white text-zinc-600 hover:bg-zinc-100 border border-zinc-200'
+                }`}
+              >
+                {loc.label}
+              </button>
+            ))}
+          </div>
+
+          {selectedQuickCategory !== 'ALL' && (
+            <div className="inline-flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-950 px-3 py-1.5 rounded-xl text-xs font-bold shrink-0">
+              <span>
+                Filtered: {quickCategoryOptions.find((c) => c.id === selectedQuickCategory)?.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedQuickCategory('ALL')}
+                className="text-amber-800 hover:text-zinc-950 underline cursor-pointer"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
+
+        {/* Private Transfers Spotlight when Private Transfers Quick Category is clicked */}
+        {selectedQuickCategory === 'transfers' && transport.length > 0 && (
+          <div className="mb-8 bg-blue-50/60 border border-blue-200 rounded-2xl p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-zinc-950 flex items-center gap-2">
+                  <Car className="w-4 h-4 text-blue-700" />
+                  <span>Direct Private Chauffeur Transfers Across Malaysia</span>
+                </h3>
+                <p className="text-xs text-zinc-600 mt-0.5">
+                  Instant rate selection for Sedans, MPVs &amp; VIP Vans · Direct Website Checkout
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('/transport')}
+                className="text-xs font-bold text-blue-800 hover:text-blue-950 inline-flex items-center gap-1 cursor-pointer"
+              >
+                All {transport.length} Transfer Routes <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {transport.slice(0, 4).map((tr) => (
+                <div
+                  key={tr.id}
+                  onClick={() => onNavigate('/package', { id: tr.id })}
+                  className="bg-white border border-zinc-200 hover:border-blue-500 rounded-xl p-4 cursor-pointer transition-colors flex flex-col justify-between"
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">
+                      Private Transfer
+                    </span>
+                    <h4 className="text-sm font-extrabold text-zinc-950 mt-1 line-clamp-2">
+                      {tr.name}
+                    </h4>
+                  </div>
+                  <div className="mt-3 pt-2.5 border-t border-zinc-100 flex items-center justify-between">
+                    <span className="text-sm font-black text-zinc-950 tabular-nums">
+                      {formatPrice(Number(tr.car) || 0)}
+                      <span className="text-[11px] font-normal text-zinc-500"> / car</span>
+                    </span>
+                    <span className="text-xs font-bold text-blue-700 inline-flex items-center">
+                      Select <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Packages Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

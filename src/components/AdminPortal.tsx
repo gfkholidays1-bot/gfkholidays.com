@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { doc, setDoc } from 'firebase/firestore';
 import { getFirebaseFirestore } from '../lib/firebase';
-import { Package, MapPin, Users, Calendar, Settings, Image as ImageIcon, Plus, Trash2, Shield, Mail, Phone, CreditCard, DollarSign, Clock, CheckCircle, XCircle, Search, Filter, AlertTriangle, FileText, Check, LayoutDashboard, Ticket, Building2, Truck, Box, Package as PackageIcon, Globe, MessageSquare, X, Edit, Crop, Plane, RefreshCw, Flame } from 'lucide-react';
+import { Package, MapPin, Users, Calendar, Settings, Image as ImageIcon, Plus, Trash2, Shield, Mail, Phone, CreditCard, DollarSign, Clock, CheckCircle, XCircle, Search, Filter, AlertTriangle, FileText, Check, LayoutDashboard, Ticket, Building2, Truck, Box, Package as PackageIcon, Globe, MessageSquare, X, Edit, Crop, Plane, RefreshCw, Flame, ArrowRightLeft, Send, Server } from 'lucide-react';
 import {
   useCurrencyRate,
   syncFxConfig,
@@ -11,6 +11,14 @@ import {
   formatCurrencyValue,
   CURRENCY_ORDER
 } from '../lib/currency';
+import {
+  ALL_MAIL_HIERARCHY_KEYS,
+  DEFAULT_EMAIL_HIERARCHY_MAP,
+  getMergedEmailHierarchy,
+  resolveBookingMailDispatch,
+  dispatchTransactionalEmail
+} from '../lib/mailRouting';
+import { ServiceHierarchyKey, EmailHierarchyRule } from '../types';
 import DashboardCharts from './DashboardCharts';
 import HomepageCmsPanel from './HomepageCmsPanel';
 
@@ -112,8 +120,6 @@ export default function AdminPortal({
   const [htChild, setHtChild] = useState<any>(null);
   const [htRooms, setHtRooms] = useState<any[]>([]);
   const [htTrending, setHtTrending] = useState(false);
-  const [htViatorUrl, setHtViatorUrl] = useState('');
-  const [htTripadvisorUrl, setHtTripadvisorUrl] = useState('');
 
   const [editingTkIdx, setEditingTkIdx] = useState<number | null>(null);
   const [tkName, setTkName] = useState('');
@@ -128,8 +134,11 @@ export default function AdminPortal({
   const [tkChild, setTkChild] = useState<any>(null);
   const [tkCats, setTkCats] = useState<any[]>([]);
   const [tkTrending, setTkTrending] = useState(false);
+  const [tkMarketplaceEnabled, setTkMarketplaceEnabled] = useState(false);
+  const [tkGygUrl, setTkGygUrl] = useState('');
   const [tkViatorUrl, setTkViatorUrl] = useState('');
   const [tkTripadvisorUrl, setTkTripadvisorUrl] = useState('');
+  const [tkKlookUrl, setTkKlookUrl] = useState('');
 
   const [editingAgIdx, setEditingAgIdx] = useState<number | null>(null);
   const [agComp, setAgComp] = useState('');
@@ -172,8 +181,6 @@ export default function AdminPortal({
   const [pkgChild, setPkgChild] = useState<any>(null);
   const [pkgItinerary, setPkgItinerary] = useState<any[]>([]);
   const [pkgTrending, setPkgTrending] = useState(false);
-  const [pkgViatorUrl, setPkgViatorUrl] = useState('');
-  const [pkgTripadvisorUrl, setPkgTripadvisorUrl] = useState('');
 
   const [trName, setTrName] = useState('');
   const [trCar, setTrCar] = useState(0);
@@ -186,16 +193,30 @@ export default function AdminPortal({
   const [trTC, setTrTC] = useState('');
   const [trTiming, setTrTiming] = useState('');
   const [trTrending, setTrTrending] = useState(false);
-  const [trViatorUrl, setTrViatorUrl] = useState('');
-  const [trTripadvisorUrl, setTrTripadvisorUrl] = useState('');
   
   const [smtpHost, setSmtpHost] = useState('');
   const [smtpPort, setSmtpPort] = useState('');
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpPass, setSmtpPass] = useState('');
+  const [smtpFromName, setSmtpFromName] = useState('GFK Holidays Malaysia');
+  const [smtpConfiguredStatus, setSmtpConfiguredStatus] = useState<{
+    configured: boolean;
+    hasPass: boolean;
+    hasResendKey: boolean;
+    updatedAt?: string;
+  }>({ configured: false, hasPass: false, hasResendKey: false });
   const [accountsEmail, setAccountsEmail] = useState('booking@gfkholidays.com');
   const [bookingEmail, setBookingEmail] = useState('booking@gfkholidays.com');
   const [flightsEmail, setFlightsEmail] = useState('flights@gfkholidays.com');
+  const [emailHierarchyRouting, setEmailHierarchyRouting] = useState<Record<ServiceHierarchyKey, EmailHierarchyRule>>(
+    () => getMergedEmailHierarchy()
+  );
+  const [mailLogs, setMailLogs] = useState<any[]>([]);
+  const [loadingMailLogs, setLoadingMailLogs] = useState(false);
+  const [testingMail, setTestingMail] = useState(false);
+  const [mailTestRecipient, setMailTestRecipient] = useState('');
+  const emailDirtyRef = useRef(false);
+  const smtpDirtyRef = useRef(false);
   const [heroVideoUrl, setHeroVideoUrl] = useState('');
   const [heroBgColor, setHeroBgColor] = useState('');
 
@@ -208,14 +229,81 @@ export default function AdminPortal({
   const [fxUseManualRate, setFxUseManualRate] = useState<boolean>(false);
   const [fxManualRateOverride, setFxManualRateOverride] = useState<number>(20.65);
 
+  const fetchServerSmtpConfig = async () => {
+    try {
+      const res = await fetch('/api/smtp-config');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.ok) {
+        if (!smtpDirtyRef.current) {
+          if (data.smtpHost) setSmtpHost(data.smtpHost);
+          if (data.smtpPort) setSmtpPort(data.smtpPort);
+          if (data.smtpUser) setSmtpUser(data.smtpUser);
+          if (data.fromName) setSmtpFromName(data.fromName);
+        }
+        setSmtpConfiguredStatus({
+          configured: Boolean(data.configured),
+          hasPass: Boolean(data.hasPass),
+          hasResendKey: Boolean(data.hasResendKey),
+          updatedAt: data.updatedAt
+        });
+      }
+    } catch {
+      // Ignore network hiccup on initial load
+    }
+  };
+
+  const fetchMailLogs = async () => {
+    setLoadingMailLogs(true);
+    try {
+      const res = await fetch('/api/mail-logs');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.logs)) {
+          setMailLogs(data.logs);
+        }
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setLoadingMailLogs(false);
+    }
+  };
+
+  const clearMailLogs = async () => {
+    try {
+      const res = await fetch('/api/mail-logs', { method: 'DELETE' });
+      if (res.ok) {
+        setMailLogs([]);
+        showToast('Mail dispatch audit log cleared');
+      }
+    } catch {
+      showToast('Unable to clear mail logs');
+    }
+  };
+
+  useEffect(() => {
+    fetchServerSmtpConfig();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'emails') {
+      fetchServerSmtpConfig();
+      fetchMailLogs();
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     const globalSettings = settings?.find((s: any) => s.id === 'global');
     if (globalSettings) {
       setInvoiceTemplate(globalSettings.invoiceTemplate || 'modern');
       setCustomInvoiceHtml(globalSettings.customInvoiceHtml || '');
-      if (globalSettings.bookingEmail) setBookingEmail(globalSettings.bookingEmail);
-      if (globalSettings.accountsEmail) setAccountsEmail(globalSettings.accountsEmail);
-      if (globalSettings.flightsEmail) setFlightsEmail(globalSettings.flightsEmail);
+      if (!emailDirtyRef.current) {
+        if (globalSettings.bookingEmail !== undefined) setBookingEmail(globalSettings.bookingEmail || 'booking@gfkholidays.com');
+        if (globalSettings.accountsEmail !== undefined) setAccountsEmail(globalSettings.accountsEmail || 'booking@gfkholidays.com');
+        if (globalSettings.flightsEmail !== undefined) setFlightsEmail(globalSettings.flightsEmail || 'flights@gfkholidays.com');
+        setEmailHierarchyRouting(getMergedEmailHierarchy(globalSettings));
+      }
       if (globalSettings.fxMarkupInr !== undefined) setFxMarkupInr(Number(globalSettings.fxMarkupInr));
       if (globalSettings.fxMarkupPercent !== undefined) setFxMarkupPercent(Number(globalSettings.fxMarkupPercent));
       if (globalSettings.fxIntlMarkupPercent !== undefined) setFxIntlMarkupPercent(Number(globalSettings.fxIntlMarkupPercent));
@@ -256,94 +344,108 @@ export default function AdminPortal({
     const newBookings = [...(bookings || [])];
     const bIndex = newBookings.findIndex((b: any) => b.id === booking.id);
     if (bIndex >= 0) {
-      newBookings[bIndex] = { 
-        ...newBookings[bIndex], 
-        status: 'INVOICE_SENT', 
-        invoiceSentAt: new Date().toISOString() 
+      newBookings[bIndex] = {
+        ...newBookings[bIndex],
+        status: 'INVOICE_SENT',
+        invoiceSentAt: new Date().toISOString()
       };
       await onUpdateBookings(newBookings);
-      showToast('Booking Confirmed & Invoice Sent');
-      
-      try {
-        const smtpData = emailSettings?.find((s: any) => s.id === 'smtp') || settings?.find((s: any) => s.id === 'global');
-        if (!smtpData || !smtpData.smtpUser || !smtpData.smtpPass) {
-          showToast('SMTP settings missing, email not sent.');
-          return;
-        }
-        if (!booking.email) {
-          showToast('No customer email provided, email not sent.');
-          return;
-        }
-        
-        const globalSettings = settings?.find((s: any) => s.id === 'global');
-        const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
-        const item = getNormalizedItem ? getNormalizedItem(booking.pkgId) : null;
-        const title = item ? (item.title || item.name) : 'Service';
-        
-        const checkoutTotal = booking.total || 0;
-        
-        await fetch('/api/send-email', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
-          },
-          body: JSON.stringify({
-            to: booking.email,
-            subject: `Invoice & Confirmation: ${title} [${booking.id}]`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 40px auto; color: #3f3f46; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; background: #ffffff;">
-                <div style="padding: 30px;">
-                  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 25px;">
-                    <img src="${window.location.origin}/android-chrome-512x512.png" alt="GFK Logo" style="height: 44px; width: 44px; object-fit: contain;" />
-                    <div>
-                      <h1 style="font-size: 24px; font-weight: 800; color: #18181b; margin: 0;">GFK Holidays</h1>
-                      <p style="font-size: 10px; font-weight: 700; color: #a1a1aa; text-transform: uppercase; margin: 4px 0 0 0; letter-spacing: 0.5px;">Booking Confirmed</p>
-                    </div>
+
+      const globalSettings = settings?.find((s: any) => s.id === 'global');
+      const smtpData = emailSettings?.find((s: any) => s.id === 'smtp') || {};
+      const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
+      const item = getNormalizedItem ? getNormalizedItem(booking.pkgId) : { id: booking.pkgId };
+      const title = item ? (item.title || item.name) : 'Service';
+      const dispatch = resolveBookingMailDispatch(item, {
+        ...globalSettings,
+        bookingEmail,
+        accountsEmail,
+        flightsEmail,
+        emailHierarchyRouting
+      });
+      const checkoutTotal = booking.total || 0;
+
+      if (!booking.email) {
+        showToast('Booking marked Invoice Sent (no customer email provided).');
+        return;
+      }
+
+      const customerEmailLower = booking.email.trim().toLowerCase();
+      const ccDeskList = [dispatch.primaryRecipient, ...dispatch.ccRecipients].filter(
+        (addr) => addr && addr.trim().toLowerCase() !== customerEmailLower
+      );
+
+      const res = await dispatchTransactionalEmail(
+        {
+          to: booking.email,
+          cc: ccDeskList,
+          replyTo: dispatch.primaryRecipient || accountsEmail || bookingEmail,
+          fromEmail: dispatch.billingEmail || accountsEmail || smtpUser || undefined,
+          fromName: smtpFromName || 'GFK Holidays Malaysia',
+          categoryKey: dispatch.categoryKey,
+          categoryLabel: dispatch.rule.label,
+          bookingId: booking.id,
+          smtpHost: smtpHost || smtpData.smtpHost || undefined,
+          smtpPort: smtpPort || smtpData.smtpPort || undefined,
+          smtpUser: smtpUser || smtpData.smtpUser || undefined,
+          smtpPass: smtpPass || smtpData.smtpPass || undefined,
+          subject: `Invoice & Confirmation: ${title} [${booking.id}]`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 40px auto; color: #3f3f46; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; background: #ffffff;">
+              <div style="padding: 30px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 25px;">
+                  <img src="${window.location.origin}/android-chrome-512x512.png" alt="GFK Logo" style="height: 44px; width: 44px; object-fit: contain;" />
+                  <div>
+                    <h1 style="font-size: 24px; font-weight: 800; color: #18181b; margin: 0;">GFK Holidays Malaysia</h1>
+                    <p style="font-size: 10px; font-weight: 700; color: #047857; text-transform: uppercase; margin: 4px 0 0 0; letter-spacing: 0.5px;">${dispatch.rule.label} · Booking Confirmed</p>
                   </div>
-                  
-                  <div style="background-color: #f4f4f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; border-left: 4px solid #4f46e5;">
-                    <p style="margin: 0; font-size: 14px; font-weight: 700; color: #18181b;">Booking ID: ${booking.id}</p>
-                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #52525b;">Client: ${booking.client || booking.customerName}</p>
-                  </div>
-                  
-                  <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 25px;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-                      <thead>
-                        <tr style="background-color: #f4f4f5; color: #71717a;">
-                          <th style="padding: 15px; text-align: left; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Description</th>
-                          <th style="padding: 15px; text-align: right; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-100 bg-white">
-                        <tr>
-                          <td style="padding: 15px; border-bottom: 1px solid #e4e4e7;">
-                            <div style="font-weight: 700; color: #18181b;">${title}</div>
-                            <div style="font-size: 11px; color: #a1a1aa; margin-top: 5px;">Date: ${booking.date || ''} &nbsp;|&nbsp; Slot: ${booking.timeSlot || 'Standard Admission'}</div>
-                          </td>
-                          <td style="padding: 15px; text-align: right; font-weight: 700; color: #18181b; border-bottom: 1px solid #e4e4e7;">RM ${checkoutTotal.toLocaleString()}</td>
-                        </tr>
-                        <tr style="background-color: #f4f4f5;">
-                          <td style="padding: 15px; text-align: right; font-weight: 700; color: #71717a;">Outstanding Balance Due</td>
-                          <td style="padding: 15px; text-align: right; font-weight: 800; color: #4338ca; font-size: 14px;">RM ${checkoutTotal.toLocaleString()}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  
-                  <p style="font-size: 11px; color: #52525b; margin: 0 0 10px 0; line-height: 1.5;">
-                    After payment, reply directly to this mail or share your transfer slip screenshot with <strong style="color: #3f3f46;">${globalSettings?.bookingEmail || 'booking@gfkholidays.com'}</strong> mentioning reference <strong style="color: #18181b;">#${booking.id}</strong>.
-                  </p>
-                  <p style="font-size: 11px; color: #be123c; background-color: #fff1f2; border: 1px solid #ffe4e6; padding: 10px; border-radius: 6px; font-weight: 700; margin: 0 0 15px 0;">
-                    ⚠️ IMPORTANT DEADLINE: ${globalSettings?.invoiceMessage || 'Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
-                  </p>
                 </div>
+                <div style="background-color: #f4f4f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; border-left: 4px solid #047857;">
+                  <p style="margin: 0; font-size: 14px; font-weight: 700; color: #18181b;">Booking ID: ${booking.id}</p>
+                  <p style="margin: 5px 0 0 0; font-size: 13px; color: #52525b;">Client: ${booking.client || booking.customerName}</p>
+                  <p style="margin: 5px 0 0 0; font-size: 12px; color: #52525b;">Assigned Desk: ${dispatch.primaryRecipient}</p>
+                </div>
+                <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 25px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                    <thead>
+                      <tr style="background-color: #f4f4f5; color: #71717a;">
+                        <th style="padding: 15px; text-align: left; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Description</th>
+                        <th style="padding: 15px; text-align: right; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style="padding: 15px; border-bottom: 1px solid #e4e4e7;">
+                          <div style="font-weight: 700; color: #18181b;">${title}</div>
+                          <div style="font-size: 11px; color: #a1a1aa; margin-top: 5px;">Date: ${booking.date || ''} &nbsp;|&nbsp; Slot: ${booking.timeSlot || 'Standard Admission'}</div>
+                        </td>
+                        <td style="padding: 15px; text-align: right; font-weight: 700; color: #18181b; border-bottom: 1px solid #e4e4e7;">RM ${checkoutTotal.toLocaleString()}</td>
+                      </tr>
+                      <tr style="background-color: #f4f4f5;">
+                        <td style="padding: 15px; text-align: right; font-weight: 700; color: #71717a;">Outstanding Balance Due</td>
+                        <td style="padding: 15px; text-align: right; font-weight: 800; color: #4338ca; font-size: 14px;">RM ${checkoutTotal.toLocaleString()}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p style="font-size: 11px; color: #52525b; margin: 0 0 10px 0; line-height: 1.5;">
+                  Questions or updates? Reply directly to this email or contact <strong style="color: #3f3f46;">${dispatch.primaryRecipient}</strong> mentioning reference <strong style="color: #18181b;">#${booking.id}</strong>.
+                </p>
+                <p style="font-size: 11px; color: #be123c; background-color: #fff1f2; border: 1px solid #ffe4e6; padding: 10px; border-radius: 6px; font-weight: 700; margin: 0 0 15px 0;">
+                  ⚠️ IMPORTANT: ${globalSettings?.invoiceMessage || 'Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
+                </p>
               </div>
-            `
-          })
-        });
-      } catch(err) {
-        console.error("Email failed", err);
+            </div>
+          `
+        },
+        token
+      );
+
+      if (res.ok) {
+        showToast(`Invoice email sent to ${booking.email} (Desk: ${dispatch.primaryRecipient})`);
+        fetchMailLogs();
+      } else {
+        showToast(`Booking confirmed, but email delivery failed: ${res.error || 'Configure SMTP in Email Routing'}`);
       }
     }
   };
@@ -355,40 +457,56 @@ export default function AdminPortal({
       newBookings[bIndex] = { ...newBookings[bIndex], status: 'REJECTED' };
       await onUpdateBookings(newBookings);
       showToast('Booking Rejected');
-      
+
       if (!booking.email) {
         showToast('No customer email provided, rejection email not sent.');
         return;
       }
-      
-      try {
-        const globalSettings = settings?.find((s: any) => s.id === 'global');
-        const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
-        const item = getNormalizedItem ? getNormalizedItem(booking.pkgId) : null;
-        const title = item ? (item.title || item.name) : 'Service';
-        
-        await fetch('/api/send-email', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
-          },
-          body: JSON.stringify({
-            to: booking.email,
-            subject: `Booking Cancelled: ${title} [${booking.id}]`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; background: #ffffff;">
-                <div style="padding: 30px;">
-                  <h1 style="font-size: 20px; font-weight: 800; color: #ef4444; margin: 0 0 15px 0;">Booking Cancelled</h1>
-                  <p style="font-size: 14px; color: #3f3f46; line-height: 1.5;">We regret to inform you that your booking request <strong>#${booking.id}</strong> could not be fulfilled at this time.</p>
-                  <p style="font-size: 14px; color: #3f3f46; line-height: 1.5;">If you have any questions, please contact our support team.</p>
-                </div>
+
+      const globalSettings = settings?.find((s: any) => s.id === 'global');
+      const smtpData = emailSettings?.find((s: any) => s.id === 'smtp') || {};
+      const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
+      const item = getNormalizedItem ? getNormalizedItem(booking.pkgId) : { id: booking.pkgId };
+      const title = item ? (item.title || item.name) : 'Service';
+      const dispatch = resolveBookingMailDispatch(item, {
+        ...globalSettings,
+        bookingEmail,
+        accountsEmail,
+        flightsEmail,
+        emailHierarchyRouting
+      });
+
+      const res = await dispatchTransactionalEmail(
+        {
+          to: booking.email,
+          cc: dispatch.primaryRecipient && dispatch.primaryRecipient.toLowerCase() !== booking.email.toLowerCase() ? [dispatch.primaryRecipient] : [],
+          replyTo: dispatch.primaryRecipient || bookingEmail,
+          fromEmail: dispatch.billingEmail || accountsEmail || smtpUser || undefined,
+          fromName: smtpFromName || 'GFK Holidays Malaysia',
+          categoryKey: dispatch.categoryKey,
+          categoryLabel: dispatch.rule.label,
+          bookingId: booking.id,
+          smtpHost: smtpHost || smtpData.smtpHost || undefined,
+          smtpPort: smtpPort || smtpData.smtpPort || undefined,
+          smtpUser: smtpUser || smtpData.smtpUser || undefined,
+          smtpPass: smtpPass || smtpData.smtpPass || undefined,
+          subject: `Booking Cancelled: ${title} [${booking.id}]`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; background: #ffffff;">
+              <div style="padding: 30px;">
+                <h1 style="font-size: 20px; font-weight: 800; color: #ef4444; margin: 0 0 15px 0;">Booking Cancelled</h1>
+                <p style="font-size: 14px; color: #3f3f46; line-height: 1.5;">We regret to inform you that your ${dispatch.rule.label} booking request <strong>#${booking.id}</strong> could not be fulfilled at this time.</p>
+                <p style="font-size: 14px; color: #3f3f46; line-height: 1.5;">If you have any questions, please contact our ${dispatch.rule.label} desk at <strong>${dispatch.primaryRecipient}</strong>.</p>
               </div>
-            `
-          })
-        });
-      } catch(err) {
-        console.error("Rejection Email failed", err);
+            </div>
+          `
+        },
+        token
+      );
+      if (!res.ok) {
+        showToast(`Cancellation email failed: ${res.error || 'SMTP not configured'}`);
+      } else {
+        fetchMailLogs();
       }
     }
   };
@@ -462,39 +580,138 @@ export default function AdminPortal({
   };
 
   const handleSaveSmtp = async () => {
-    if (onUpdateEmailSettings) {
+    const effectiveHost = (smtpHost || 'smtp.gmail.com').trim();
+    const effectivePort = (smtpPort || '465').trim();
+    const effectiveBooking = (bookingEmail || 'booking@gfkholidays.com').trim();
+    const effectiveAccounts = (accountsEmail || 'booking@gfkholidays.com').trim();
+    const effectiveFlights = (flightsEmail || 'flights@gfkholidays.com').trim();
+
+    let serverSavedOk = false;
+    let serverErrorMsg = '';
+    try {
+      const res = await fetch('/api/smtp-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          smtpHost: effectiveHost,
+          smtpPort: effectivePort,
+          smtpUser: (smtpUser || '').trim(),
+          smtpPass: (smtpPass || '').trim(),
+          fromEmail: effectiveAccounts || effectiveBooking || (smtpUser || '').trim(),
+          fromName: (smtpFromName || 'GFK Holidays Malaysia').trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.ok) {
+        serverSavedOk = true;
+        setSmtpConfiguredStatus({
+          configured: Boolean(data.configured),
+          hasPass: Boolean(data.hasPass),
+          hasResendKey: smtpConfiguredStatus.hasResendKey,
+          updatedAt: data.updatedAt
+        });
+      } else {
+        serverErrorMsg = data?.error || 'Could not persist SMTP config on server';
+      }
+    } catch (err: any) {
+      serverErrorMsg = err?.message || 'Network error saving SMTP config';
+    }
+
+    // Persist non-secret routing hierarchy and desk addresses into GlobalSettings & emailSettings atomically
+    const baseCollection = Array.isArray(settings)
+      ? [...settings]
+      : Array.isArray(emailSettings)
+      ? [...emailSettings]
+      : [];
+    const gIdx = baseCollection.findIndex((s: any) => s.id === 'global');
+    const existingGlobal = gIdx >= 0 ? baseCollection[gIdx] : { id: 'global' };
+    const updatedGlobal = {
+      ...existingGlobal,
+      id: 'global',
+      accountsEmail: effectiveAccounts,
+      bookingEmail: effectiveBooking,
+      flightsEmail: effectiveFlights,
+      voucherDisplayMode: voucherDisplayMode || 'payment_only',
+      emailHierarchyRouting
+    };
+    if (gIdx >= 0) baseCollection[gIdx] = updatedGlobal;
+    else baseCollection.push(updatedGlobal);
+
+    if (onUpdateSettings) {
+      await onUpdateSettings(baseCollection);
+    }
+
+    if (onUpdateEmailSettings && onUpdateEmailSettings !== onUpdateSettings) {
       const newEmailSettings = [...(emailSettings || [])];
       const smtpIdx = newEmailSettings.findIndex((s: any) => s.id === 'smtp');
       const updatedSmtp = {
         ...(smtpIdx >= 0 ? newEmailSettings[smtpIdx] : { id: 'smtp' }),
-        smtpHost: smtpHost || 'smtp.gmail.com',
-        smtpPort: smtpPort || '465',
-        smtpUser,
-        smtpPass,
-        accountsEmail: accountsEmail || 'booking@gfkholidays.com',
-        bookingEmail: bookingEmail || 'booking@gfkholidays.com',
-        flightsEmail: flightsEmail || 'flights@gfkholidays.com'
+        smtpHost: effectiveHost,
+        smtpPort: effectivePort,
+        smtpUser: (smtpUser || '').trim(),
+        fromName: (smtpFromName || 'GFK Holidays Malaysia').trim(),
+        accountsEmail: effectiveAccounts,
+        bookingEmail: effectiveBooking,
+        flightsEmail: effectiveFlights
       };
-
-      const globalIdx = newEmailSettings.findIndex((s: any) => s.id === 'global');
-      if (globalIdx >= 0) {
-        newEmailSettings[globalIdx] = {
-          ...newEmailSettings[globalIdx],
-          accountsEmail: accountsEmail || 'booking@gfkholidays.com',
-          bookingEmail: bookingEmail || 'booking@gfkholidays.com',
-          flightsEmail: flightsEmail || 'flights@gfkholidays.com'
+      const emailGlobalIdx = newEmailSettings.findIndex((s: any) => s.id === 'global');
+      if (emailGlobalIdx >= 0) {
+        newEmailSettings[emailGlobalIdx] = {
+          ...newEmailSettings[emailGlobalIdx],
+          accountsEmail: effectiveAccounts,
+          bookingEmail: effectiveBooking,
+          flightsEmail: effectiveFlights,
+          emailHierarchyRouting
         };
       }
-      
       if (smtpIdx >= 0) newEmailSettings[smtpIdx] = updatedSmtp;
       else newEmailSettings.push(updatedSmtp);
-      
       await onUpdateEmailSettings(newEmailSettings);
-      showToast('Email Routing & SMTP Settings Saved!');
+    }
+
+    emailDirtyRef.current = false;
+    smtpDirtyRef.current = false;
+    setBookingEmail(effectiveBooking);
+    setAccountsEmail(effectiveAccounts);
+    setFlightsEmail(effectiveFlights);
+
+    if (serverSavedOk) {
+      showToast('Service Hierarchy, Mail Movement & Server SMTP Credentials Saved!');
+    } else {
+      showToast(`Hierarchy saved, SMTP warning: ${serverErrorMsg}`);
     }
   };
 
+  const updateHierarchyRule = (
+    key: ServiceHierarchyKey,
+    patch: Partial<EmailHierarchyRule>
+  ) => {
+    emailDirtyRef.current = true;
+    setEmailHierarchyRouting((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || DEFAULT_EMAIL_HIERARCHY_MAP[key]),
+        ...patch
+      }
+    }));
+  };
 
+  const swapRulePrimaryAndCc = (key: ServiceHierarchyKey) => {
+    emailDirtyRef.current = true;
+    setEmailHierarchyRouting((prev) => {
+      const current = prev[key] || DEFAULT_EMAIL_HIERARCHY_MAP[key];
+      const nextPrimary = (current.ccEmail || '').split(/[,;]/)[0]?.trim() || current.primaryEmail;
+      const nextCc = current.primaryEmail || '';
+      return {
+        ...prev,
+        [key]: {
+          ...current,
+          primaryEmail: nextPrimary,
+          ccEmail: nextCc
+        }
+      };
+    });
+  };
 
   const handleSavePackage = (e?: any) => {
     if (e?.preventDefault) e.preventDefault();
@@ -519,9 +736,7 @@ export default function AdminPortal({
       itinerary: pkgItinerary,
       rating: Number(pkgRating) || 5,
       reviews: Number(pkgReviews) || 0,
-      trending: Boolean(pkgTrending),
-      viatorUrl: pkgViatorUrl.trim(),
-      tripadvisorUrl: pkgTripadvisorUrl.trim()
+      trending: Boolean(pkgTrending)
     };
     if (editingPkgIdx === -1) onUpdatePackages([...packages, pkg]);
     else onUpdatePackages(packages.map((p: any, i: number) => i === editingPkgIdx ? { ...p, ...pkg } : p));
@@ -552,9 +767,7 @@ export default function AdminPortal({
       termsAndConditions: trTC,
       instructions: trInst,
       timings: trTiming,
-      trending: Boolean(trTrending),
-      viatorUrl: trViatorUrl.trim(),
-      tripadvisorUrl: trTripadvisorUrl.trim()
+      trending: Boolean(trTrending)
     };
     if (editingTrIdx === -1) onUpdateTransport([...transport, tr]);
     else onUpdateTransport(transport.map((t: any, i: number) => i === editingTrIdx ? { ...t, ...tr } : t));
@@ -584,9 +797,7 @@ export default function AdminPortal({
       termsAndConditions: htTC,
       instructions: htInst,
       timings: htTiming,
-      trending: Boolean(htTrending),
-      viatorUrl: htViatorUrl.trim(),
-      tripadvisorUrl: htTripadvisorUrl.trim()
+      trending: Boolean(htTrending)
     };
     if (editingHtIdx === -1) onUpdateHotels([...hotels, ht]);
     else onUpdateHotels(hotels.map((h: any, i: number) => i === editingHtIdx ? { ...h, ...ht } : h));
@@ -618,6 +829,9 @@ export default function AdminPortal({
       instructions: tkInst,
       timings: tkTiming,
       trending: Boolean(tkTrending),
+      marketplaceEnabled: Boolean(tkMarketplaceEnabled),
+      getyourguideUrl: tkGygUrl.trim(),
+      klookUrl: tkKlookUrl.trim(),
       viatorUrl: tkViatorUrl.trim(),
       tripadvisorUrl: tkTripadvisorUrl.trim()
     };
@@ -672,29 +886,34 @@ export default function AdminPortal({
       showToast('Client email is missing.');
       return;
     }
-    showToast('Sending Invoice Email...');
-    
-    // We will get smtp config from emailSettings
-    const smtpData = emailSettings?.find((s: any) => s.id === 'smtp') || settings?.find((s: any) => s.id === 'global');
-    if (!smtpData || !smtpData.smtpUser || !smtpData.smtpPass) {
-      showToast('Please configure SMTP settings first.');
-      return;
-    }
+    showToast('Dispatching Invoice Email...');
 
-    const title = getNormalizedItem ? (getNormalizedItem(viewInvoiceBooking.pkgId)?.title || viewInvoiceBooking.pkgId) : viewInvoiceBooking.pkgId;
+    const globalSettings = settings?.find((s: any) => s.id === 'global');
+    const smtpData = emailSettings?.find((s: any) => s.id === 'smtp') || {};
+    const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
+    const item = getNormalizedItem ? getNormalizedItem(viewInvoiceBooking.pkgId) : { id: viewInvoiceBooking.pkgId };
+    const title = item ? (item.title || item.name || viewInvoiceBooking.pkgId) : viewInvoiceBooking.pkgId;
+    const dispatch = resolveBookingMailDispatch(item, {
+      ...globalSettings,
+      bookingEmail,
+      accountsEmail,
+      flightsEmail,
+      emailHierarchyRouting
+    });
+
     const client = viewInvoiceBooking.client || viewInvoiceBooking.customerName || 'Customer';
-    const invoiceTotal = viewInvoiceBooking.invoiceItems 
-      ? viewInvoiceBooking.invoiceItems.reduce((acc: number, it: any) => acc + Number(it.amount), 0) 
+    const invoiceTotal = viewInvoiceBooking.invoiceItems
+      ? viewInvoiceBooking.invoiceItems.reduce((acc: number, it: any) => acc + Number(it.amount), 0)
       : viewInvoiceBooking.total;
-    const invoiceItems = viewInvoiceBooking.invoiceItems || [{desc: title, amount: invoiceTotal}];
-    const itemsHtml = invoiceItems.map((item: any) => 
+    const invoiceItems = viewInvoiceBooking.invoiceItems || [{ desc: title, amount: invoiceTotal }];
+    const itemsHtml = invoiceItems.map((it: any) =>
       `<tr>
         <td style="padding: 15px; border-bottom: 1px solid #e4e4e7;">
-          <strong style="color: #18181b; display: block; font-size: 13px;">${item.desc}</strong>
+          <strong style="color: #18181b; display: block; font-size: 13px;">${it.desc}</strong>
         </td>
-        <td style="padding: 15px; text-align: center; border-bottom: 1px solid #e4e4e7;">RM ${item.amount ? Number(item.amount).toLocaleString() : '0'}</td>
+        <td style="padding: 15px; text-align: center; border-bottom: 1px solid #e4e4e7;">RM ${it.amount ? Number(it.amount).toLocaleString() : '0'}</td>
         <td style="padding: 15px; text-align: center; border-bottom: 1px solid #e4e4e7;">1x</td>
-        <td style="padding: 15px; text-align: right; font-weight: 700; color: #18181b; border-bottom: 1px solid #e4e4e7;">RM ${item.amount ? Number(item.amount).toLocaleString() : '0'}</td>
+        <td style="padding: 15px; text-align: right; font-weight: 700; color: #18181b; border-bottom: 1px solid #e4e4e7;">RM ${it.amount ? Number(it.amount).toLocaleString() : '0'}</td>
       </tr>`
     ).join('');
 
@@ -715,7 +934,7 @@ export default function AdminPortal({
     } else {
       const logoHtml = `<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
         <img src="${resolvedEmailLogo}" style="max-height: 44px; width: auto;" alt="GFK Holidays Logo" />
-        <h1 style="font-size: ${invoiceTemplate === 'classic' ? '20px' : '24px'}; font-weight: ${invoiceTemplate === 'classic' ? 'normal' : '800'}; color: #18181b; margin: 0;">GFK Holidays</h1>
+        <h1 style="font-size: ${invoiceTemplate === 'classic' ? '20px' : '24px'}; font-weight: ${invoiceTemplate === 'classic' ? 'normal' : '800'}; color: #18181b; margin: 0;">GFK Holidays Malaysia</h1>
       </div>`;
 
       emailHtml = `
@@ -724,10 +943,8 @@ export default function AdminPortal({
             <div style="margin-bottom: 30px;">
               ${logoHtml}
             </div>
-            
             <p style="font-size: 14px; color: #18181b;">Dear ${client},</p>
-            <p style="font-size: 14px; color: #52525b; line-height: 1.6;">Please find your official invoice for voucher ID <strong style="color: #18181b;">#${viewInvoiceBooking.id}</strong>.</p>
-            
+            <p style="font-size: 14px; color: #52525b; line-height: 1.6;">Please find your official <strong>${dispatch.rule.label}</strong> invoice for voucher ID <strong style="color: #18181b;">#${viewInvoiceBooking.id}</strong> (Assigned Desk: ${dispatch.primaryRecipient}).</p>
             <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 25px;">
               <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
                 <thead>
@@ -747,7 +964,6 @@ export default function AdminPortal({
                 </tbody>
               </table>
             </div>
-
             <div style="background-color: ${invoiceTemplate === 'classic' ? '#ffffff' : '#eef2ff'}; border: 1px solid #e0e7ff; padding: ${invoiceTemplate === 'classic' ? '15px' : '25px'}; border-radius: ${invoiceTemplate === 'classic' ? '0px' : '12px'}; margin-bottom: 25px;">
               <div style="display: flex; align-items: center; gap: 8px; color: #312e81; font-weight: 700; font-size: 13px; margin-bottom: 15px;">
                 <span>🏦</span> Malaysia Bank Transfer Payment Account Instructions
@@ -755,7 +971,6 @@ export default function AdminPortal({
               <p style="font-size: 12px; color: #1e1b4b; margin: 0 0 15px 0;">
                 Please initiate a bank transfer for the invoice amount of <strong style="color: #312e81;">RM ${invoiceTotal ? invoiceTotal.toLocaleString() : '0'}</strong> to our authorized corporate account:
               </p>
-              
               <div style="background-color: #ffffff; padding: 15px; border-radius: 8px; border: 1px solid #e0e7ff; margin-bottom: 15px;">
                 <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
                   <tr>
@@ -786,7 +1001,6 @@ export default function AdminPortal({
     }
 
     const markInvoiceSent = async () => {
-      showToast('Invoice sent successfully to ' + viewInvoiceBooking.email);
       const newBookings = [...(bookings || [])];
       const bIndex = newBookings.findIndex((bk) => bk.id === viewInvoiceBooking.id);
       if (bIndex >= 0) {
@@ -799,30 +1013,37 @@ export default function AdminPortal({
       }
     };
 
-    try {
-      const res = await fetch('/api/send-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: viewInvoiceBooking.email,
-          subject: `Invoice #${viewInvoiceBooking.id} - ${title}`,
-          html: emailHtml,
-          smtpHost: smtpData.smtpHost || 'smtp.gmail.com',
-          smtpPort: smtpData.smtpPort || '465',
-          smtpUser: smtpData.smtpUser,
-          smtpPass: smtpData.smtpPass,
-          fromEmail: smtpData.accountsEmail || smtpData.smtpUser,
-          replyTo: smtpData.accountsEmail || smtpData.smtpUser
-        })
-      });
-      if (res.ok || res.status === 404 || res.status === 405) {
-        await markInvoiceSent();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        showToast(`Failed to send invoice: ${errData.error || 'Unknown Error'}`);
-      }
-    } catch (e) {
+    const customerEmailLower = viewInvoiceBooking.email.trim().toLowerCase();
+    const ccDeskList = [dispatch.primaryRecipient, ...dispatch.ccRecipients].filter(
+      (addr) => addr && addr.trim().toLowerCase() !== customerEmailLower
+    );
+
+    const result = await dispatchTransactionalEmail(
+      {
+        to: viewInvoiceBooking.email,
+        cc: ccDeskList,
+        subject: `Invoice #${viewInvoiceBooking.id} - ${title}`,
+        html: emailHtml,
+        categoryKey: dispatch.categoryKey,
+        categoryLabel: dispatch.rule.label,
+        bookingId: viewInvoiceBooking.id,
+        smtpHost: smtpHost || smtpData.smtpHost || undefined,
+        smtpPort: smtpPort || smtpData.smtpPort || undefined,
+        smtpUser: smtpUser || smtpData.smtpUser || undefined,
+        smtpPass: smtpPass || smtpData.smtpPass || undefined,
+        fromEmail: dispatch.billingEmail || accountsEmail || smtpUser || undefined,
+        fromName: smtpFromName || 'GFK Holidays Malaysia',
+        replyTo: dispatch.primaryRecipient || accountsEmail || bookingEmail
+      },
+      token
+    );
+
+    if (result.ok) {
       await markInvoiceSent();
+      showToast(`Invoice sent successfully to ${viewInvoiceBooking.email}`);
+      fetchMailLogs();
+    } else {
+      showToast(`Failed to send invoice: ${result.error || 'Please configure SMTP in Email Routing tab'}`);
     }
   };
 
@@ -1162,13 +1383,13 @@ export default function AdminPortal({
                       <Flame className="w-3.5 h-3.5" />
                       <span>{p.trending ? 'Trending On' : 'Set Trending'}</span>
                     </button>
-                    <button onClick={() => { setEditingPkgIdx(i); setPkgTitle(p.title); setPkgDesc(p.description); setPkgDest(p.destination); setPkgDays(p.duration_days || p.days || 1); setPkgImg(p.image || p.imageUrl || ''); setPkgVideoUrl(p.videoUrl || ''); setPkgMediaUrls(Array.isArray(p.mediaUrls) ? p.mediaUrls.join(', ') : (p.mediaUrls || '')); setPkgCategory(p.category || 'Packages'); setPkgTags(Array.isArray(p.tags) ? p.tags.join(', ') : (p.tags || '')); setPkgNet(p.net_price || p.pricing?.net || 0); setPkgPub(p.base_price || p.pricing?.published || 0); setPkgChild(p.childPolicy || ''); setPkgImportant(p.importantInfo || p.importantNotes || ''); setPkgTC(p.termsAndConditions || ''); setPkgInst(p.instructions || ''); setPkgTiming(p.timings || p.timing || ''); setPkgItinerary(p.itinerary || []); setPkgRating(p.rating || 5); setPkgReviews(p.reviews || p.reviewsCount || 0); setPkgTrending(Boolean(p.trending)); setPkgViatorUrl(p.viatorUrl || ''); setPkgTripadvisorUrl(p.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => { setEditingPkgIdx(i); setPkgTitle(p.title); setPkgDesc(p.description); setPkgDest(p.destination); setPkgDays(p.duration_days || p.days || 1); setPkgImg(p.image || p.imageUrl || ''); setPkgVideoUrl(p.videoUrl || ''); setPkgMediaUrls(Array.isArray(p.mediaUrls) ? p.mediaUrls.join(', ') : (p.mediaUrls || '')); setPkgCategory(p.category || 'Packages'); setPkgTags(Array.isArray(p.tags) ? p.tags.join(', ') : (p.tags || '')); setPkgNet(p.net_price || p.pricing?.net || 0); setPkgPub(p.base_price || p.pricing?.published || 0); setPkgChild(p.childPolicy || ''); setPkgImportant(p.importantInfo || p.importantNotes || ''); setPkgTC(p.termsAndConditions || ''); setPkgInst(p.instructions || ''); setPkgTiming(p.timings || p.timing || ''); setPkgItinerary(p.itinerary || []); setPkgRating(p.rating || 5); setPkgReviews(p.reviews || p.reviewsCount || 0); setPkgTrending(Boolean(p.trending)); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
                     <button onClick={() => handleDeletePackage(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
               ))}
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingPkgIdx(-1); setPkgTitle(''); setPkgDesc(''); setPkgDest(''); setPkgDays(3); setPkgImg(''); setPkgVideoUrl(''); setPkgMediaUrls(''); setPkgCategory('Packages'); setPkgTags('Luxury, Malaysia'); setPkgNet(0); setPkgPub(0); setPkgChild(''); setPkgImportant(''); setPkgTC(''); setPkgInst(''); setPkgTiming(''); setPkgItinerary([]); setPkgRating(5); setPkgReviews(0); setPkgTrending(false); setPkgViatorUrl(''); setPkgTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Malaysia Package</button>
+                <button onClick={() => { setEditingPkgIdx(-1); setPkgTitle(''); setPkgDesc(''); setPkgDest(''); setPkgDays(3); setPkgImg(''); setPkgVideoUrl(''); setPkgMediaUrls(''); setPkgCategory('Packages'); setPkgTags('Luxury, Malaysia'); setPkgNet(0); setPkgPub(0); setPkgChild(''); setPkgImportant(''); setPkgTC(''); setPkgInst(''); setPkgTiming(''); setPkgItinerary([]); setPkgRating(5); setPkgReviews(0); setPkgTrending(false); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Malaysia Package</button>
               </div>
             </div>
           </div>
@@ -1187,7 +1408,7 @@ export default function AdminPortal({
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
              <div className="space-y-4">
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingTrIdx(-1); setTrName(''); setTrCar(0); setTrMpv(0); setTrVan7(0); setTrVan13(0); setTrChild(''); setTrImage(''); setTrImportant(''); setTrTC(''); setTrInst(''); setTrTiming(''); setTrTrending(false); setTrViatorUrl(''); setTrTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Transport Route</button>
+                <button onClick={() => { setEditingTrIdx(-1); setTrName(''); setTrCar(0); setTrMpv(0); setTrVan7(0); setTrVan13(0); setTrChild(''); setTrImage(''); setTrImportant(''); setTrTC(''); setTrInst(''); setTrTiming(''); setTrTrending(false); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Transport Route</button>
               </div>
               {transport.map((t: any, i: number) => (
                 <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
@@ -1217,7 +1438,7 @@ export default function AdminPortal({
                       <Flame className="w-3.5 h-3.5" />
                       <span>{t.trending ? 'Trending On' : 'Set Trending'}</span>
                     </button>
-                    <button onClick={() => { setEditingTrIdx(i); setTrName(t.name); setTrCar(t.car ?? t.vehicles?.car ?? 0); setTrMpv(t.mpv ?? t.vehicles?.mpv ?? 0); setTrVan7(t.van7 ?? t.vehicles?.van7 ?? 0); setTrVan13(t.van13 ?? t.vehicles?.van13 ?? 0); setTrChild(t.childPolicy || ''); setTrImage(t.image || t.imageUrl || ''); setTrImportant(t.importantInfo || t.importantNotes || ''); setTrTC(t.termsAndConditions || ''); setTrInst(t.instructions || ''); setTrTiming(t.timings || t.timing || ''); setTrTrending(Boolean(t.trending)); setTrViatorUrl(t.viatorUrl || ''); setTrTripadvisorUrl(t.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => { setEditingTrIdx(i); setTrName(t.name); setTrCar(t.car ?? t.vehicles?.car ?? 0); setTrMpv(t.mpv ?? t.vehicles?.mpv ?? 0); setTrVan7(t.van7 ?? t.vehicles?.van7 ?? 0); setTrVan13(t.van13 ?? t.vehicles?.van13 ?? 0); setTrChild(t.childPolicy || ''); setTrImage(t.image || t.imageUrl || ''); setTrImportant(t.importantInfo || t.importantNotes || ''); setTrTC(t.termsAndConditions || ''); setTrInst(t.instructions || ''); setTrTiming(t.timings || t.timing || ''); setTrTrending(Boolean(t.trending)); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
                     <button onClick={() => handleDeleteTransport(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
@@ -1239,7 +1460,7 @@ export default function AdminPortal({
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
              <div className="space-y-4">
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingHtIdx(-1); setHtName(''); setHtCat('4-Star'); setHtPrice(0); setHtChild(''); setHtRooms([{ name: 'Standard Room', price: 0, pax: 2 }]); setHtImage(''); setHtImportant(''); setHtTC(''); setHtInst(''); setHtTiming(''); setHtTrending(false); setHtViatorUrl(''); setHtTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Contracted Hotel</button>
+                <button onClick={() => { setEditingHtIdx(-1); setHtName(''); setHtCat('4-Star'); setHtPrice(0); setHtChild(''); setHtRooms([{ name: 'Standard Room', price: 0, pax: 2 }]); setHtImage(''); setHtImportant(''); setHtTC(''); setHtInst(''); setHtTiming(''); setHtTrending(false); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Contracted Hotel</button>
               </div>
               {hotels.map((h: any, i: number) => (
                 <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
@@ -1269,7 +1490,7 @@ export default function AdminPortal({
                       <Flame className="w-3.5 h-3.5" />
                       <span>{h.trending ? 'Trending On' : 'Set Trending'}</span>
                     </button>
-                    <button onClick={() => { setEditingHtIdx(i); setHtName(h.name); setHtCat(h.cat || h.category || '4-Star'); setHtPrice(h.price || h.priceOptions?.[0]?.price || 0); setHtChild(h.childPolicy || ''); setHtRooms(Array.isArray(h.roomCategories) ? h.roomCategories : [{ name: 'Standard Room', price: h.price || 0, pax: 2 }]); setHtImage(h.image || h.imageUrl || ''); setHtImportant(h.importantInfo || h.importantNotes || ''); setHtTC(h.termsAndConditions || ''); setHtInst(h.instructions || ''); setHtTiming(h.timings || h.timing || ''); setHtTrending(Boolean(h.trending)); setHtViatorUrl(h.viatorUrl || ''); setHtTripadvisorUrl(h.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => { setEditingHtIdx(i); setHtName(h.name); setHtCat(h.cat || h.category || '4-Star'); setHtPrice(h.price || h.priceOptions?.[0]?.price || 0); setHtChild(h.childPolicy || ''); setHtRooms(Array.isArray(h.roomCategories) ? h.roomCategories : [{ name: 'Standard Room', price: h.price || 0, pax: 2 }]); setHtImage(h.image || h.imageUrl || ''); setHtImportant(h.importantInfo || h.importantNotes || ''); setHtTC(h.termsAndConditions || ''); setHtInst(h.instructions || ''); setHtTiming(h.timings || h.timing || ''); setHtTrending(Boolean(h.trending)); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
                     <button onClick={() => handleDeleteHotel(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
@@ -1285,22 +1506,27 @@ export default function AdminPortal({
           <div className="flex justify-between items-center bg-zinc-50 px-6 py-4 rounded-3xl border border-zinc-150">
             <div>
               <h2 className="text-xl font-black text-zinc-950">Attractions &amp; Tickets</h2>
-              <p className="text-xs font-bold text-zinc-400 mt-0.5">Manage Malaysia theme parks, observation decks &amp; skip-the-line passes</p>
+              <p className="text-xs font-bold text-zinc-400 mt-0.5">Manage attraction passes and curate which trending activities appear on external Marketplaces (GetYourGuide, Viator, TripAdvisor, Klook)</p>
             </div>
           </div>
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
              <div className="space-y-4">
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingTkIdx(-1); setTkName(''); setTkCats([]); setTkPrice(0); setTkChild(''); setTkInfo(''); setTkAddInfo(''); setTkImage(''); setTkImportant(''); setTkTC(''); setTkInst(''); setTkTiming(''); setTkTrending(false); setTkViatorUrl(''); setTkTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Attraction</button>
+                <button onClick={() => { setEditingTkIdx(-1); setTkName(''); setTkCats([]); setTkPrice(0); setTkChild(''); setTkInfo(''); setTkAddInfo(''); setTkImage(''); setTkImportant(''); setTkTC(''); setTkInst(''); setTkTiming(''); setTkTrending(false); setTkMarketplaceEnabled(false); setTkGygUrl(''); setTkViatorUrl(''); setTkTripadvisorUrl(''); setTkKlookUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Attraction</button>
               </div>
               {tickets.map((t: any, i: number) => (
                 <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
                   <div>
-                    <div className="font-bold text-zinc-900 flex items-center gap-2">
+                    <div className="font-bold text-zinc-900 flex items-center gap-2 flex-wrap">
                       <span>{t.name}</span>
                       {t.trending && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-extrabold">
                           <Flame className="w-3 h-3" /> Trending
+                        </span>
+                      )}
+                      {t.marketplaceEnabled && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 text-[10px] font-extrabold">
+                          Marketplace Promoted
                         </span>
                       )}
                     </div>
@@ -1310,7 +1536,7 @@ export default function AdminPortal({
                     <button
                       type="button"
                       onClick={() => {
-                        const updated = tickets.map((item: any, idx: number) => idx === i ? { ...item, trending: !item.trending } : item);
+                        const updated = tickets.map((item: any, idx: number) => idx === i ? { ...item, trending: !item.trending, marketplaceEnabled: !item.trending ? true : item.marketplaceEnabled } : item);
                         onUpdateTickets(updated);
                         showToast(!t.trending ? 'Marked as Trending Activity' : 'Removed from Trending');
                       }}
@@ -1321,7 +1547,7 @@ export default function AdminPortal({
                       <Flame className="w-3.5 h-3.5" />
                       <span>{t.trending ? 'Trending On' : 'Set Trending'}</span>
                     </button>
-                    <button onClick={() => { setEditingTkIdx(i); setTkName(t.name); setTkCats(t.ticketCategories || []); setTkPrice(t.price || t.priceOptions?.[0]?.price || 0); setTkChild(t.childPolicy || ''); setTkInfo(t.info || ''); setTkAddInfo(t.addInfo || t.additionalInfo || ''); setTkImage(t.image || t.imageUrl || ''); setTkImportant(t.importantInfo || t.importantNotes || ''); setTkTC(t.termsAndConditions || ''); setTkInst(t.instructions || ''); setTkTiming(t.timings || t.timing || ''); setTkTrending(Boolean(t.trending)); setTkViatorUrl(t.viatorUrl || ''); setTkTripadvisorUrl(t.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => { setEditingTkIdx(i); setTkName(t.name); setTkCats(t.ticketCategories || []); setTkPrice(t.price || t.priceOptions?.[0]?.price || 0); setTkChild(t.childPolicy || ''); setTkInfo(t.info || ''); setTkAddInfo(t.addInfo || t.additionalInfo || ''); setTkImage(t.image || t.imageUrl || ''); setTkImportant(t.importantInfo || t.importantNotes || ''); setTkTC(t.termsAndConditions || ''); setTkInst(t.instructions || ''); setTkTiming(t.timings || t.timing || ''); setTkTrending(Boolean(t.trending)); setTkMarketplaceEnabled(Boolean(t.marketplaceEnabled ?? t.trending)); setTkGygUrl(t.getyourguideUrl || ''); setTkViatorUrl(t.viatorUrl || ''); setTkTripadvisorUrl(t.tripadvisorUrl || ''); setTkKlookUrl(t.klookUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
                     <button onClick={() => handleDeleteTicket(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
@@ -1374,155 +1600,484 @@ export default function AdminPortal({
         </div>
       )}
 
-      {/* --- EMAIL ROUTING TAB --- */}
+      {/* --- EMAIL ROUTING & HIERARCHY MOVEMENT TAB --- */}
       {activeTab === 'emails' && (
-        <div className="space-y-6 animate-fade-in">
-          <div className="flex justify-between items-center bg-zinc-50 px-6 py-4 rounded-3xl border border-zinc-150">
+        <div className="space-y-6 animate-fade-in max-w-6xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white px-6 py-5 rounded-3xl border border-zinc-200 shadow-xs">
             <div>
-              <h2 className="text-xl font-black text-zinc-950">SMTP Email Configuration</h2>
-              <p className="text-xs font-bold text-zinc-400 mt-0.5">Configure your SMTP server to send automated emails directly (e.g. Gmail App Passwords, SendGrid, Brevo)</p>
+              <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-emerald-700">
+                <Mail className="w-4 h-4" />
+                <span>Service Hierarchy &amp; Transactional Mail Engine</span>
+              </div>
+              <h2 className="text-xl font-black text-zinc-950 mt-1">
+                Mail Movement Hierarchy &amp; SMTP Server Configuration
+              </h2>
+              <p className="text-xs font-medium text-zinc-500 mt-0.5">
+                Control exactly which department inbox receives confirmations, inquiries, and Stripe receipts across our 5 core service verticals, plus test live SMTP dispatch.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold border ${
+                  smtpConfiguredStatus.configured
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : smtpConfiguredStatus.hasResendKey
+                    ? 'bg-sky-50 text-sky-800 border-sky-200'
+                    : 'bg-amber-50 text-amber-900 border-amber-200'
+                }`}
+              >
+                {smtpConfiguredStatus.configured
+                  ? 'SMTP Verified & Ready'
+                  : smtpConfiguredStatus.hasResendKey
+                  ? 'Resend API Active'
+                  : 'SMTP Not Configured'}
+              </span>
+              <button
+                type="button"
+                onClick={handleSaveSmtp}
+                className="bg-zinc-950 text-white px-5 py-2.5 rounded-xl font-black shadow-md flex items-center hover:bg-emerald-700 text-xs cursor-pointer transition-colors"
+              >
+                <Check className="w-4 h-4 mr-1.5" />
+                Save Hierarchy &amp; SMTP
+              </button>
             </div>
           </div>
-          
-          <div className="bg-white rounded-3xl border border-zinc-250 p-6 max-w-2xl">
-            <div className="space-y-6">
-              
+
+          {/* 1. Service Hierarchy & Mail Movement Manager */}
+          <div className="bg-white rounded-3xl border border-zinc-200 p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
+              <div>
+                <h3 className="text-base font-black text-zinc-950 flex items-center gap-2">
+                  <ArrowRightLeft className="w-4 h-4 text-emerald-700" />
+                  <span>Website Service Hierarchy &amp; Desk Mail Movement</span>
+                </h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Hierarchy follows: Attraction Tickets → Hotels &amp; Resorts → Private Transfers → Dining → Holiday Packages, plus Flights &amp; Billing. Move mails between desks anytime.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  emailDirtyRef.current = true;
+                  setEmailHierarchyRouting(getMergedEmailHierarchy({ bookingEmail, accountsEmail, flightsEmail }));
+                  showToast('Reset category routing to default desk mapping (click Save to apply)');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-bold cursor-pointer shrink-0"
+              >
+                Reset Defaults
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {ALL_MAIL_HIERARCHY_KEYS.map((key) => {
+                const rule = emailHierarchyRouting[key] || DEFAULT_EMAIL_HIERARCHY_MAP[key];
+                const billingTarget = (bookingEmail || 'booking@gfkholidays.com').trim();
+                const deptDefaultTarget = DEFAULT_EMAIL_HIERARCHY_MAP[key].ccEmail || DEFAULT_EMAIL_HIERARCHY_MAP[key].primaryEmail;
+
+                return (
+                  <div
+                    key={key}
+                    className={`rounded-2xl border p-4 transition-colors ${
+                      rule.enabled ? 'bg-zinc-50/70 border-zinc-200' : 'bg-zinc-100/50 border-zinc-200 opacity-75'
+                    }`}
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="min-w-0 lg:w-1/3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-md bg-zinc-900 text-white text-[10px] font-black uppercase tracking-wider">
+                            Tier {rule.priority}
+                          </span>
+                          <span className="font-black text-sm text-zinc-950">{rule.label}</span>
+                        </div>
+                        <p className="text-[11px] text-zinc-500 mt-1">{rule.description}</p>
+                        <div className="flex flex-wrap items-center gap-3 mt-2.5 text-[11px] font-bold text-zinc-700">
+                          <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={rule.enabled}
+                              onChange={(e) => updateHierarchyRule(key, { enabled: e.target.checked })}
+                              className="w-3.5 h-3.5 accent-emerald-700 rounded"
+                            />
+                            <span>Active Routing</span>
+                          </label>
+                          <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={rule.ccBillingDesk}
+                              onChange={(e) => updateHierarchyRule(key, { ccBillingDesk: e.target.checked })}
+                              className="w-3.5 h-3.5 accent-emerald-700 rounded"
+                            />
+                            <span>CC Billing</span>
+                          </label>
+                          <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={rule.sendCustomerCopy}
+                              onChange={(e) => updateHierarchyRule(key, { sendCustomerCopy: e.target.checked })}
+                              className="w-3.5 h-3.5 accent-emerald-700 rounded"
+                            />
+                            <span>Customer Copy</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
+                        <div>
+                          <label className="block text-[10px] font-extrabold uppercase tracking-wider text-zinc-500 mb-1">
+                            Primary Desk Email (To)
+                          </label>
+                          <input
+                            type="email"
+                            value={rule.primaryEmail ?? ''}
+                            onChange={(e) => updateHierarchyRule(key, { primaryEmail: e.target.value })}
+                            className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-950 outline-none focus:border-emerald-600"
+                            placeholder="desk@gfkholidays.com"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-extrabold uppercase tracking-wider text-zinc-500 mb-1">
+                            Secondary / CC Email
+                          </label>
+                          <input
+                            type="text"
+                            value={rule.ccEmail ?? ''}
+                            onChange={(e) => updateHierarchyRule(key, { ccEmail: e.target.value })}
+                            className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-950 outline-none focus:border-emerald-600"
+                            placeholder="ops@gfkholidays.com"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap lg:flex-col gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => updateHierarchyRule(key, { primaryEmail: billingTarget })}
+                          className="px-2.5 py-1.5 rounded-lg bg-white border border-zinc-200 hover:border-emerald-500 text-[11px] font-bold text-zinc-800 cursor-pointer"
+                        >
+                          Move → Billing Desk
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateHierarchyRule(key, { primaryEmail: deptDefaultTarget })}
+                          className="px-2.5 py-1.5 rounded-lg bg-white border border-zinc-200 hover:border-emerald-500 text-[11px] font-bold text-zinc-800 cursor-pointer"
+                        >
+                          Move → Dept Desk
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => swapRulePrimaryAndCc(key)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-[11px] font-bold text-emerald-900 cursor-pointer"
+                        >
+                          Swap Primary ↔ CC
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* 2. SMTP Credentials & Sender Verification */}
+            <div className="lg:col-span-6 bg-white rounded-3xl border border-zinc-200 p-6 shadow-xs space-y-5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-black text-zinc-950 flex items-center gap-2">
+                  <Server className="w-4 h-4 text-emerald-700" />
+                  <span>SMTP Server &amp; Sender Identity</span>
+                </h3>
+                {smtpConfiguredStatus.hasPass && !smtpPass && (
+                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                    Password Stored Securely on Server
+                  </span>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-zinc-500 mb-1 text-sm font-bold">SMTP Host</label>
-                  <input 
-                    type="text" 
-                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                    value={smtpHost || ""}
-                    onChange={(e) => setSmtpHost(e.target.value)}
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">SMTP Host</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                    value={smtpHost ?? ''}
+                    onChange={(e) => { smtpDirtyRef.current = true; setSmtpHost(e.target.value); }}
                     placeholder="smtp.gmail.com"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-500 mb-1 text-sm font-bold">SMTP Port</label>
-                  <input type="text" className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none" value={smtpPort || ""} onChange={(e) => setSmtpPort(e.target.value)}
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">SMTP Port</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                    value={smtpPort ?? ''}
+                    onChange={(e) => { smtpDirtyRef.current = true; setSmtpPort(e.target.value); }}
                     placeholder="465"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-zinc-500 mb-1 text-sm font-bold">SMTP Username</label>
-                <input 
-                  type="email" 
-                  className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                  value={smtpUser || ""} onChange={(e) => setSmtpUser(e.target.value)}
-                  placeholder="your-email@gmail.com"
-                />
-              </div>
-
-              <div>
-                <label className="block text-zinc-500 mb-1 text-sm font-bold">SMTP Password (or App Password)</label>
-                <input 
-                  type="password" 
-                  className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                  value={smtpPass || ""} onChange={(e) => setSmtpPass(e.target.value)}
-                  placeholder="••••••••••••••••"
-                />
-                <p className="text-xs text-zinc-400 mt-2">If using Gmail, generate an "App Password" in your Google Account settings. Do not use your regular password.</p>
-              </div>
-
-              <div className="pt-6 mt-6 border-t border-zinc-100">
-                <h3 className="font-bold text-zinc-900 mb-4">Dedicated Email Routing Addresses</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Payments, Bank Slips &amp; Bookings Email</label>
-                    <input 
-                      type="email" 
-                      className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                      value={bookingEmail || "booking@gfkholidays.com"} onChange={(e) => setBookingEmail(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Flight Fare Quotes &amp; Inquiries Email (Non-Banking)</label>
-                    <input 
-                      type="email" 
-                      className="w-full p-3 bg-sky-50 border border-sky-200 rounded-xl font-bold text-sky-900 outline-none"
-                      value={flightsEmail || "flights@gfkholidays.com"} onChange={(e) => setFlightsEmail(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Accounts / Finance Reply-To Email</label>
-                    <input 
-                      type="email" 
-                      className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                      value={accountsEmail || "booking@gfkholidays.com"} onChange={(e) => setAccountsEmail(e.target.value)}
-                    />
-                  </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">SMTP Username</label>
+                  <input
+                    type="email"
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                    value={smtpUser ?? ''}
+                    onChange={(e) => { smtpDirtyRef.current = true; setSmtpUser(e.target.value); }}
+                    placeholder="your-email@gmail.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">Sender Display Name</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                    value={smtpFromName ?? ''}
+                    onChange={(e) => { smtpDirtyRef.current = true; setSmtpFromName(e.target.value); }}
+                    placeholder="GFK Holidays Malaysia"
+                  />
                 </div>
               </div>
 
-              <div className="bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm">
-                <h3 className="text-lg font-black text-zinc-900 mb-4">Voucher & Offer Display Control</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Display Location</label>
-                    <select
-                      value={voucherDisplayMode || 'payment_only'}
-                      onChange={(e) => setVoucherDisplayMode(e.target.value as any)}
-                      className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm cursor-pointer"
-                    >
-                      <option value="payment_only">Payment Page Only (Recommended)</option>
-                      <option value="both">Homepage & Payment Page</option>
-                      <option value="hidden">Hidden / Disabled</option>
-                    </select>
-                    <p className="text-xs text-zinc-400 mt-2">Control whether promotional vouchers and offer banners appear at the top of the homepage or strictly at checkout/payment pages.</p>
-                  </div>
+              <div>
+                <label className="block text-zinc-500 mb-1 text-xs font-bold">
+                  SMTP Password / App Password {smtpConfiguredStatus.hasPass ? '(leave blank to keep existing)' : ''}
+                </label>
+                <input
+                  type="password"
+                  className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                  value={smtpPass ?? ''}
+                  onChange={(e) => { smtpDirtyRef.current = true; setSmtpPass(e.target.value); }}
+                  placeholder={smtpConfiguredStatus.hasPass ? '•••••••• (saved on server)' : 'Enter SMTP App Password'}
+                />
+                <p className="text-[11px] text-zinc-400 mt-1.5">
+                  Stored privately on the server (`data/smtp-config.json`), never in public website snapshots. If using Gmail, generate a 16-char App Password.
+                </p>
+              </div>
+
+              <div className="pt-4 border-t border-zinc-100 space-y-3">
+                <h4 className="font-bold text-xs uppercase tracking-wider text-zinc-500">
+                  Core Desk Addresses
+                </h4>
+                <div>
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">Payments, Stripe &amp; Bookings Email</label>
+                  <input
+                    type="email"
+                    className="w-full p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                    value={bookingEmail}
+                    placeholder="booking@gfkholidays.com"
+                    onChange={(e) => { emailDirtyRef.current = true; setBookingEmail(e.target.value); }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">Flight Fare Quotes &amp; Inquiries Email (Non-Banking)</label>
+                  <input
+                    type="email"
+                    className="w-full p-2.5 bg-sky-50 border border-sky-200 rounded-xl font-bold text-sky-900 outline-none text-sm"
+                    value={flightsEmail}
+                    placeholder="flights@gfkholidays.com"
+                    onChange={(e) => { emailDirtyRef.current = true; setFlightsEmail(e.target.value); }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-500 mb-1 text-xs font-bold">Accounts / Finance Reply-To Email</label>
+                  <input
+                    type="email"
+                    className="w-full p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                    value={accountsEmail}
+                    placeholder="booking@gfkholidays.com"
+                    onChange={(e) => { emailDirtyRef.current = true; setAccountsEmail(e.target.value); }}
+                  />
                 </div>
               </div>
 
-              <div className="pt-4 flex justify-end space-x-4">
-                <button 
-                  onClick={async () => {
-                    if (!smtpUser || !smtpPass) {
-                      showToast('Please enter both SMTP Username and Password.');
-                      return;
-                    }
-                    showToast('Sending test email...');
-                    try {
-                      const res = await fetch('/api/send-email', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          to: accountsEmail || smtpUser,
-                          subject: 'Test Email Configuration - GFK Holidays',
-                          html: '<p>If you are seeing this, your SMTP settings are configured correctly!</p>',
-                          smtpHost: smtpHost || 'smtp.gmail.com',
-                          smtpPort: smtpPort || '465',
-                          smtpUser: smtpUser,
-                          smtpPass: smtpPass,
-                          fromEmail: accountsEmail,
-                          replyTo: accountsEmail
-                        })
-                      });
-                      if (res.ok || res.status === 404 || res.status === 405) {
-                        showToast('SMTP settings verified and saved to cloud profile.');
-                      } else {
-                        const errData = await res.json().catch(() => ({}));
-                        showToast(`SMTP Error: ${errData.error || 'Failed to send test email'}`);
+              <div className="pt-4 border-t border-zinc-100 space-y-3">
+                <label className="block text-zinc-500 text-xs font-bold">Voucher &amp; Offer Display Control</label>
+                <select
+                  value={voucherDisplayMode || 'payment_only'}
+                  onChange={(e) => setVoucherDisplayMode(e.target.value as any)}
+                  className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm cursor-pointer"
+                >
+                  <option value="payment_only">Payment Page Only (Recommended)</option>
+                  <option value="both">Homepage &amp; Payment Page</option>
+                  <option value="hidden">Hidden / Disabled</option>
+                </select>
+              </div>
+
+              <div className="pt-4 border-t border-zinc-100 space-y-3">
+                <label className="block text-zinc-500 text-xs font-bold">Send Live Verification Test Email To</label>
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <input
+                    type="email"
+                    value={mailTestRecipient}
+                    onChange={(e) => setMailTestRecipient(e.target.value)}
+                    placeholder={accountsEmail || bookingEmail || smtpUser || 'recipient@gfkholidays.com'}
+                    className="flex-1 p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
+                  />
+                  <button
+                    type="button"
+                    disabled={testingMail}
+                    onClick={async () => {
+                      const targetRecipient = (mailTestRecipient || accountsEmail || bookingEmail || smtpUser || '').trim();
+                      if (!targetRecipient) {
+                        showToast('Enter a recipient email or configure Accounts/SMTP email first.');
+                        return;
                       }
-                    } catch (e) {
-                      showToast('SMTP settings verified and saved.');
-                    }
-                  }}
-                  className="bg-white text-zinc-900 border border-zinc-200 px-6 py-2.5 rounded-xl font-bold shadow-sm hover:bg-zinc-50"
-                >
-                  Test Connection
-                </button>
-                <button 
-                  onClick={handleSaveSmtp}
-                  className="bg-zinc-950 text-white px-6 py-2.5 rounded-xl font-black shadow-md flex items-center hover:bg-zinc-800"
-                >
-                  <Check className="w-4 h-4 mr-2" />
-                  Save Settings
-                </button>
+                      setTestingMail(true);
+                      try {
+                        // First verify & persist SMTP if host/user present
+                        if (smtpUser || smtpConfiguredStatus.configured) {
+                          const verifyRes = await fetch('/api/smtp-config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              smtpHost: smtpHost || 'smtp.gmail.com',
+                              smtpPort: smtpPort || '465',
+                              smtpUser: smtpUser || '',
+                              smtpPass: smtpPass || '',
+                              fromEmail: accountsEmail || bookingEmail || smtpUser,
+                              fromName: smtpFromName || 'GFK Holidays Malaysia',
+                              verify: true
+                            })
+                          });
+                          const verifyData = await verifyRes.json().catch(() => ({}));
+                          if (!verifyRes.ok && !smtpConfiguredStatus.hasResendKey) {
+                            showToast(`SMTP Verify Failed: ${verifyData?.error || 'Check credentials'}`);
+                            setTestingMail(false);
+                            return;
+                          }
+                          if (verifyData?.ok) {
+                            setSmtpConfiguredStatus((prev) => ({
+                              ...prev,
+                              configured: Boolean(verifyData.configured),
+                              hasPass: Boolean(verifyData.hasPass),
+                              updatedAt: verifyData.updatedAt
+                            }));
+                          }
+                        }
+
+                        const testRes = await dispatchTransactionalEmail({
+                          to: targetRecipient,
+                          subject: 'SMTP Verification Test — GFK Holidays Malaysia',
+                          html: `<div style="font-family:sans-serif;padding:24px;border:1px solid #e4e4e7;border-radius:12px;">
+                            <h2 style="margin:0 0 8px 0;color:#065f46;">GFK Holidays Mail Server Verified</h2>
+                            <p style="margin:0;color:#3f3f46;font-size:14px;">Live Nodemailer SMTP dispatch is working properly across all 5 service hierarchy desks.</p>
+                            <p style="margin:12px 0 0 0;color:#71717a;font-size:12px;">Timestamp: ${new Date().toISOString()}</p>
+                          </div>`,
+                          categoryKey: 'payments',
+                          categoryLabel: 'SMTP Health Verification',
+                          smtpHost: smtpHost || undefined,
+                          smtpPort: smtpPort || undefined,
+                          smtpUser: smtpUser || undefined,
+                          smtpPass: smtpPass || undefined,
+                          fromEmail: accountsEmail || bookingEmail || smtpUser || undefined,
+                          fromName: smtpFromName || 'GFK Holidays Malaysia',
+                          replyTo: accountsEmail || bookingEmail || undefined
+                        });
+
+                        await fetchMailLogs();
+                        if (testRes.ok) {
+                          showToast(`Test email delivered to ${targetRecipient} (ID: ${testRes.messageId || 'ok'})`);
+                        } else {
+                          showToast(`Test Dispatch Failed: ${testRes.error || 'Verify SMTP credentials'}`);
+                        }
+                      } finally {
+                        setTestingMail(false);
+                      }
+                    }}
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl font-black text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{testingMail ? 'Testing...' : 'Verify & Send Test Mail'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Live Mail Dispatch & Movement Audit Log */}
+            <div className="lg:col-span-6 bg-white rounded-3xl border border-zinc-200 p-6 shadow-xs flex flex-col">
+              <div className="flex items-center justify-between gap-2 pb-4 border-b border-zinc-100">
+                <div>
+                  <h3 className="text-base font-black text-zinc-950">Live Mail Dispatch &amp; Audit Log</h3>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Real-time record of every transactional booking, flight quote, and Stripe mail attempt.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={fetchMailLogs}
+                    disabled={loadingMailLogs}
+                    className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 rounded-lg text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingMailLogs ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                  {mailLogs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearMailLogs}
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto max-h-[540px] divide-y divide-zinc-100 mt-2">
+                {mailLogs.length === 0 ? (
+                  <div className="py-16 text-center text-xs text-zinc-400 font-semibold">
+                    No transactional emails dispatched yet in the current server log. Send a test email or trigger a booking confirmation to inspect routing logs here.
+                  </div>
+                ) : (
+                  mailLogs.map((log: any) => (
+                    <div key={log.id} className="py-3.5 space-y-1">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                              log.status === 'SENT'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-red-100 text-red-700'
+                            }`}
+                          >
+                            {log.status}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 text-[10px] font-bold uppercase">
+                            {log.provider || 'smtp'}
+                          </span>
+                          {log.categoryLabel && (
+                            <span className="text-[11px] font-extrabold text-zinc-900">
+                              {log.categoryLabel}
+                            </span>
+                          )}
+                          {log.bookingId && (
+                            <span className="font-mono text-[10px] text-zinc-500">#{log.bookingId}</span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-zinc-400 font-mono">
+                          {new Date(log.timestamp).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-xs font-bold text-zinc-900 truncate" title={log.subject}>
+                        {log.subject}
+                      </p>
+                      <p className="text-[11px] text-zinc-600">
+                        To: <strong>{log.to}</strong>
+                        {log.cc ? ` · CC: ${log.cc}` : ''}
+                      </p>
+                      {log.status === 'FAILED' && log.error && (
+                        <p className="text-[11px] text-red-600 bg-red-50 px-2.5 py-1.5 rounded-lg font-medium">
+                          {log.error}
+                        </p>
+                      )}
+                      {log.status === 'SENT' && log.messageId && (
+                        <p className="text-[10px] text-emerald-700 font-mono">Message ID: {log.messageId}</p>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -2400,7 +2955,7 @@ export default function AdminPortal({
                 <textarea rows={2} value={pkgChild} onChange={(e) => setPkgChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
               </div>
 
-              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-3">
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl">
                 <label className="flex items-center gap-2.5 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -2410,29 +2965,9 @@ export default function AdminPortal({
                   />
                   <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
                     <Flame className="w-3.5 h-3.5 text-amber-600" />
-                    Mark as Trending Service (Shown in Viator &amp; TripAdvisor Trending Showcase)
+                    Mark as Trending Holiday Package (Direct Website Feature)
                   </span>
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[11px] text-zinc-600 mb-1">Viator Direct URL (Optional)</label>
-                    <input
-                      value={pkgViatorUrl}
-                      onChange={(e) => setPkgViatorUrl(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
-                      placeholder="https://www.viator.com/..."
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-zinc-600 mb-1">TripAdvisor Direct URL (Optional)</label>
-                    <input
-                      value={pkgTripadvisorUrl}
-                      onChange={(e) => setPkgTripadvisorUrl(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
-                      placeholder="https://www.tripadvisor.com/..."
-                    />
-                  </div>
-                </div>
               </div>
 
               <div className="pt-2 border-t border-zinc-100">
@@ -2579,7 +3114,7 @@ export default function AdminPortal({
                 <textarea rows={2} value={trChild} onChange={(e) => setTrChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
               </div>
 
-              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2.5">
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl">
                 <label className="flex items-center gap-2.5 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -2589,21 +3124,9 @@ export default function AdminPortal({
                   />
                   <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
                     <Flame className="w-3.5 h-3.5 text-amber-600" />
-                    Mark as Trending Transfer
+                    Mark as Trending Private Transfer (Direct Website Feature)
                   </span>
                 </label>
-                <input
-                  value={trViatorUrl}
-                  onChange={(e) => setTrViatorUrl(e.target.value)}
-                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
-                  placeholder="Viator URL (Optional)"
-                />
-                <input
-                  value={trTripadvisorUrl}
-                  onChange={(e) => setTrTripadvisorUrl(e.target.value)}
-                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
-                  placeholder="TripAdvisor URL (Optional)"
-                />
               </div>
 
               <div className="flex gap-3 pt-4">
@@ -2716,7 +3239,7 @@ export default function AdminPortal({
                 <textarea rows={2} value={htChild} onChange={(e) => setHtChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
               </div>
 
-              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2.5">
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl">
                 <label className="flex items-center gap-2.5 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -2726,21 +3249,9 @@ export default function AdminPortal({
                   />
                   <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
                     <Flame className="w-3.5 h-3.5 text-amber-600" />
-                    Mark as Trending Stay
+                    Mark as Trending Stay (Direct Website Feature)
                   </span>
                 </label>
-                <input
-                  value={htViatorUrl}
-                  onChange={(e) => setHtViatorUrl(e.target.value)}
-                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
-                  placeholder="Viator URL (Optional)"
-                />
-                <input
-                  value={htTripadvisorUrl}
-                  onChange={(e) => setHtTripadvisorUrl(e.target.value)}
-                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
-                  placeholder="TripAdvisor URL (Optional)"
-                />
               </div>
 
               <div className="pt-2 border-t border-zinc-100">
@@ -2901,6 +3412,23 @@ export default function AdminPortal({
                     Mark as Trending Activity / Pass
                   </span>
                 </label>
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={tkMarketplaceEnabled}
+                    onChange={(e) => setTkMarketplaceEnabled(e.target.checked)}
+                    className="w-4 h-4 accent-emerald-700 rounded"
+                  />
+                  <span className="font-extrabold text-emerald-950">
+                    Promote on External Marketplace Hub (GetYourGuide / Viator / TripAdvisor / Klook)
+                  </span>
+                </label>
+                <input
+                  value={tkGygUrl}
+                  onChange={(e) => setTkGygUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="GetYourGuide URL (Optional)"
+                />
                 <input
                   value={tkViatorUrl}
                   onChange={(e) => setTkViatorUrl(e.target.value)}
@@ -2912,6 +3440,12 @@ export default function AdminPortal({
                   onChange={(e) => setTkTripadvisorUrl(e.target.value)}
                   className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
                   placeholder="TripAdvisor URL (Optional)"
+                />
+                <input
+                  value={tkKlookUrl}
+                  onChange={(e) => setTkKlookUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="Klook URL (Optional)"
                 />
               </div>
 

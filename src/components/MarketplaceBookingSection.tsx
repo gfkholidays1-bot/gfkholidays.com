@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
-  ArrowRight,
   CheckCircle2,
   ExternalLink,
   Flame,
@@ -10,6 +9,7 @@ import {
   Search,
   ShieldCheck,
   Star,
+  Ticket as TicketIcon,
   X
 } from 'lucide-react';
 import {
@@ -26,27 +26,23 @@ import { useCurrencyRate } from '../lib/currency';
 
 interface MarketplaceBookingSectionProps {
   settings: GlobalSettings;
-  packages: Package[];
+  packages?: Package[];
   tickets: Ticket[];
-  hotels: Hotel[];
-  transport: TransportRoute[];
+  hotels?: Hotel[];
+  transport?: TransportRoute[];
   imageMap: Record<string, string>;
   currentAgent: Agent | null;
   onNavigate: (path: string, params?: any) => void;
   variant?: 'page' | 'desktop' | 'mobile';
 }
 
-type CategoryFilter = 'all' | 'tickets' | 'packages' | 'hotels' | 'transport';
-
-interface NormalizedMarketplaceItem {
+interface MarketplaceAttractionItem {
   id: string;
-  kind: 'ticket' | 'package' | 'hotel' | 'transport';
-  kindLabel: string;
   title: string;
   location: string;
+  category: string;
   priceMyr: number;
   originalPriceMyr?: number;
-  unitLabel: string;
   rating: number;
   reviews: number;
   trending: boolean;
@@ -57,48 +53,54 @@ interface NormalizedMarketplaceItem {
   klookUrl: string;
 }
 
-function getPlatformCategories(partnerName: string): string {
+function getPlatformFocus(partnerName: string): string {
   const lower = partnerName.toLowerCase();
-  if (lower.includes('viator') || lower.includes('tripadvisor')) {
-    return 'Attractions · Day Tours · Private Transfers';
-  }
   if (lower.includes('getyourguide')) {
-    return 'Guided Tours · Skip-the-Line Tickets · Transfers';
+    return 'Trending Attraction Tickets · Skip-the-Line Passes';
+  }
+  if (lower.includes('viator')) {
+    return 'Curated Attraction Tickets · City Pass Experiences';
+  }
+  if (lower.includes('tripadvisor')) {
+    return 'Top-Rated Attraction Tickets · Traveler Choice';
   }
   if (lower.includes('klook')) {
-    return 'Attraction QR Passes · Theme Parks · Chauffeurs';
+    return 'Theme Park & Observatory QR Tickets';
   }
-  if (lower.includes('agoda')) {
-    return '5-Star Resorts · Direct Stays · Airport Transfers';
-  }
-  if (lower.includes('trip.com')) {
-    return 'Tickets · Hotel Combos · Flight & Tour Bundles';
-  }
-  return 'Tours · Tickets · Transfers';
+  return 'Attraction Tickets & Experiences';
 }
 
 export default function MarketplaceBookingSection({
   settings,
-  packages,
   tickets,
-  hotels,
-  transport,
   imageMap,
   currentAgent,
   onNavigate
 }: MarketplaceBookingSectionProps) {
   const { formatPrice } = useCurrencyRate();
-  const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
-  const [onlyTrending, setOnlyTrending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [platformFilter, setPlatformFilter] = useState<'all' | 'getyourguide' | 'viator'>('all');
 
   const partners: OtaPartner[] = useMemo(() => {
-    return Array.isArray(settings.otaPartners) && settings.otaPartners.length > 0
-      ? settings.otaPartners
-      : DEFAULT_OTA_PARTNERS;
+    const raw =
+      Array.isArray(settings.otaPartners) && settings.otaPartners.length > 0
+        ? settings.otaPartners
+        : DEFAULT_OTA_PARTNERS;
+    // Focus partner portal cards on attraction ticket marketplaces (GetYourGuide, Viator, TripAdvisor, Klook)
+    const ticketPortals = raw.filter((p) => {
+      const n = p.name.toLowerCase();
+      return (
+        n.includes('getyourguide') ||
+        n.includes('viator') ||
+        n.includes('tripadvisor') ||
+        n.includes('klook') ||
+        n.includes('trip.com')
+      );
+    });
+    return ticketPortals.length > 0 ? ticketPortals : raw;
   }, [settings.otaPartners]);
 
-  const resolveImage = (key: string | undefined, fallbackKey = 'kl'): string => {
+  const resolveImage = (key: string | undefined, fallbackKey = 'petronas'): string => {
     if (!key) return imageMap[fallbackKey] || imageMap.kl;
     if (key.startsWith('http') || key.startsWith('data:') || key.startsWith('/')) {
       return key;
@@ -120,131 +122,60 @@ export default function MarketplaceBookingSection({
     )}`;
   };
 
-  const buildGygUrl = (title: string): string =>
-    `https://www.getyourguide.com/s/?q=${encodeURIComponent(`${title} Malaysia`)}`;
+  const buildGygUrl = (title: string, explicitUrl?: string): string => {
+    if (explicitUrl && explicitUrl.trim()) return explicitUrl.trim();
+    return `https://www.getyourguide.com/s/?q=${encodeURIComponent(`${title} Malaysia`)}`;
+  };
 
-  const buildKlookUrl = (title: string): string =>
-    `https://www.klook.com/search/result/?query=${encodeURIComponent(`${title} Malaysia`)}`;
+  const buildKlookUrl = (title: string, explicitUrl?: string): string => {
+    if (explicitUrl && explicitUrl.trim()) return explicitUrl.trim();
+    return `https://www.klook.com/search/result/?query=${encodeURIComponent(`${title} Malaysia`)}`;
+  };
 
-  const allItems: NormalizedMarketplaceItem[] = useMemo(() => {
+  // Strictly curated & trending ATTRACTION TICKETS promoted for external marketplace booking
+  // Packages, Hotels, Private Transfers & Dining stay exclusively on our own website.
+  const attractionItems: MarketplaceAttractionItem[] = useMemo(() => {
     const commPct = Number(currentAgent?.commission) || 0;
     const applyComm = (price: number) =>
       currentAgent ? Math.round(price * (1 - commPct / 100)) : price;
 
-    const mappedTickets: NormalizedMarketplaceItem[] = tickets.map((tk) => ({
+    const curated = tickets.filter((tk) => Boolean(tk.marketplaceEnabled || tk.trending));
+    const sourceList =
+      curated.length > 0 ? curated : tickets.filter((tk) => Boolean(tk.featured));
+
+    return sourceList.map((tk) => ({
       id: tk.id,
-      kind: 'ticket',
-      kindLabel: 'Attraction Pass',
       title: tk.name,
       location: tk.location || 'Kuala Lumpur, Malaysia',
+      category: tk.category || 'Attraction Ticket',
       priceMyr: applyComm(Number(tk.price) || 0),
       originalPriceMyr: tk.originalPrice,
-      unitLabel: '/ pass',
       rating: tk.rating || 4.9,
       reviews: tk.reviews || 420,
-      trending: Boolean(tk.trending || tk.featured),
+      trending: Boolean(tk.trending || tk.marketplaceEnabled),
       image: resolveImage(tk.image, 'petronas'),
       viatorUrl: buildViatorUrl(tk.name, tk.viatorUrl),
       tripadvisorUrl: buildTripadvisorUrl(tk.name, tk.tripadvisorUrl),
-      getyourguideUrl: buildGygUrl(tk.name),
-      klookUrl: buildKlookUrl(tk.name)
+      getyourguideUrl: buildGygUrl(tk.name, tk.getyourguideUrl),
+      klookUrl: buildKlookUrl(tk.name, tk.klookUrl)
     }));
-
-    const mappedPackages: NormalizedMarketplaceItem[] = packages.map((pkg) => ({
-      id: pkg.id,
-      kind: 'package',
-      kindLabel: `${pkg.duration_days || 3}D Tour Package`,
-      title: pkg.title,
-      location: pkg.destination || 'Malaysia',
-      priceMyr: applyComm(Number(pkg.base_price) || 0),
-      originalPriceMyr: pkg.original_price,
-      unitLabel: '/ pax',
-      rating: pkg.rating || 4.9,
-      reviews: pkg.reviews || 280,
-      trending: Boolean(pkg.trending || pkg.featured),
-      image: resolveImage(pkg.image, 'langkawi'),
-      viatorUrl: buildViatorUrl(pkg.title, pkg.viatorUrl),
-      tripadvisorUrl: buildTripadvisorUrl(pkg.title, pkg.tripadvisorUrl),
-      getyourguideUrl: buildGygUrl(pkg.title),
-      klookUrl: buildKlookUrl(pkg.title)
-    }));
-
-    const mappedHotels: NormalizedMarketplaceItem[] = hotels.map((ht) => ({
-      id: ht.id,
-      kind: 'hotel',
-      kindLabel: `${ht.cat || 'Luxury'} Contract Stay`,
-      title: ht.name,
-      location: ht.location || 'Malaysia',
-      priceMyr: applyComm(Number(ht.price) || 0),
-      originalPriceMyr: ht.originalPrice,
-      unitLabel: '/ night',
-      rating: ht.rating || 4.8,
-      reviews: ht.reviews || 310,
-      trending: Boolean(ht.trending),
-      image: resolveImage(ht.image, 'hotel'),
-      viatorUrl: buildViatorUrl(ht.name, ht.viatorUrl),
-      tripadvisorUrl: buildTripadvisorUrl(ht.name, ht.tripadvisorUrl),
-      getyourguideUrl: buildGygUrl(ht.name),
-      klookUrl: buildKlookUrl(ht.name)
-    }));
-
-    const mappedTransport: NormalizedMarketplaceItem[] = transport.map((tr) => ({
-      id: tr.id,
-      kind: 'transport',
-      kindLabel: 'Private Chauffeur',
-      title: tr.name,
-      location: 'Peninsular Malaysia',
-      priceMyr: applyComm(Number(tr.car) || 0),
-      unitLabel: '/ vehicle',
-      rating: tr.rating || 4.9,
-      reviews: tr.reviews || 240,
-      trending: Boolean(tr.trending),
-      image: resolveImage(tr.image, 'transfer'),
-      viatorUrl: buildViatorUrl(tr.name, tr.viatorUrl),
-      tripadvisorUrl: buildTripadvisorUrl(tr.name, tr.tripadvisorUrl),
-      getyourguideUrl: buildGygUrl(tr.name),
-      klookUrl: buildKlookUrl(tr.name)
-    }));
-
-    return [
-      ...mappedTickets,
-      ...mappedPackages,
-      ...mappedHotels,
-      ...mappedTransport
-    ].sort((a, b) => Number(b.trending) - Number(a.trending));
-  }, [tickets, packages, hotels, transport, currentAgent, imageMap]);
+  }, [tickets, currentAgent, imageMap]);
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return allItems.filter((item) => {
-      if (activeCategory !== 'all' && item.kind !== activeCategory.slice(0, -1) && item.kind !== activeCategory) {
-        if (
-          !(activeCategory === 'tickets' && item.kind === 'ticket') &&
-          !(activeCategory === 'packages' && item.kind === 'package') &&
-          !(activeCategory === 'hotels' && item.kind === 'hotel') &&
-          !(activeCategory === 'transport' && item.kind === 'transport')
-        ) {
-          return false;
-        }
-      }
-      if (onlyTrending && !item.trending) return false;
+    return attractionItems.filter((item) => {
+      if (platformFilter === 'getyourguide' && !item.getyourguideUrl) return false;
+      if (platformFilter === 'viator' && !item.viatorUrl) return false;
       if (!q) return true;
-      return `${item.title} ${item.location} ${item.kindLabel}`
-        .toLowerCase()
-        .includes(q);
+      return `${item.title} ${item.location} ${item.category}`.toLowerCase().includes(q);
     });
-  }, [allItems, activeCategory, onlyTrending, searchQuery]);
-
-  const trendingCount = useMemo(
-    () => allItems.filter((i) => i.trending).length,
-    [allItems]
-  );
+  }, [attractionItems, platformFilter, searchQuery]);
 
   return (
     <div className="w-full max-w-full overflow-x-clip bg-zinc-50 min-h-screen pb-24 sm:pb-16 text-zinc-900">
-      {/* Top Return Navigation Bar */}
+      {/* Top Navigation & Policy Clarification Bar */}
       <div className="bg-white border-b border-zinc-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
           <button
             type="button"
             onClick={() => onNavigate('/')}
@@ -254,38 +185,47 @@ export default function MarketplaceBookingSection({
             <span>Back to Home</span>
           </button>
 
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg whitespace-nowrap">
-            <Flame className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-            <span>{trendingCount} Trending Services Available</span>
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg whitespace-nowrap">
+              <Flame className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              <span>{attractionItems.length} Trending Attraction Tickets</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => onNavigate('/search')}
+              className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg cursor-pointer transition-colors whitespace-nowrap"
+            >
+              <span>Website Holiday Packages, Hotels &amp; Transfers</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Main Header & Intro */}
+      {/* Main Header & Scope Statement */}
       <section className="bg-white border-b border-zinc-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 mb-2">
               <Globe className="w-4 h-4 shrink-0" />
-              <span>Verified Marketplace Portals &amp; Direct Reservation</span>
+              <span>Attraction Tickets Marketplace Hub · GetYourGuide &amp; Viator</span>
             </div>
             <h1
               className="text-2xl sm:text-4xl font-extrabold text-zinc-950 tracking-tight leading-tight"
               style={{ textWrap: 'balance' }}
             >
               {settings.otaSectionTitle ||
-                'Marketplace Booking: Platforms, Offers & Trending Services'}
+                'Trending Attraction Tickets on GetYourGuide & Viator'}
             </h1>
             <p className="text-xs sm:text-base text-zinc-600 mt-2.5 leading-relaxed">
               {settings.otaSectionSubtitle ||
-                'Choose any verified travel marketplace below to see active perks, compare platform offers, or jump straight to Viator, TripAdvisor, GetYourGuide, Klook, Trip.com, or Direct GFK Booking.'}
+                'Browse curated trending Malaysia attraction tickets promoted on GetYourGuide, Viator, TripAdvisor, and Klook. Tap any portal link to complete your attraction ticket reservation directly on that marketplace. Holiday packages, contracted hotels, private transfers, and dining remain exclusive to our direct website booking engine.'}
             </p>
           </div>
         </div>
       </section>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 space-y-10">
-        {/* SECTION 1: ALL VERIFIED MARKETPLACE PLATFORMS & ACTIVE OFFERS */}
+        {/* Official External Marketplace Platforms */}
         <section aria-labelledby="platforms-heading" className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
             <div>
@@ -293,15 +233,15 @@ export default function MarketplaceBookingSection({
                 id="platforms-heading"
                 className="text-lg sm:text-2xl font-extrabold text-zinc-950 tracking-tight"
               >
-                1. Official Platforms &amp; Active Portal Offers
+                Official Attraction Ticket Marketplaces
               </h2>
               <p className="text-xs sm:text-sm text-zinc-500 mt-0.5">
-                Tap any platform to book directly with their traveler protection and offers.
+                Explore global attraction ticket portals below and complete booking directly on their platform.
               </p>
             </div>
             <span className="text-xs font-semibold text-emerald-800 inline-flex items-center gap-1">
               <ShieldCheck className="w-4 h-4 shrink-0" />
-              All bookings fulfilled by GFK Holidays Malaysia
+              Attraction Tickets Only · External Marketplace Checkout
             </span>
           </div>
 
@@ -311,11 +251,11 @@ export default function MarketplaceBookingSection({
                 partner.perks && partner.perks.length > 0
                   ? partner.perks
                   : [
-                      'Verified Partner Fulfillment',
-                      'Instant Mobile Voucher',
-                      '24/7 Local Concierge Support'
+                      'Verified Attraction Ticket Fulfillment',
+                      'Instant Mobile QR Pass',
+                      'Free 24-Hour Cancellation Options'
                     ];
-              const categories = getPlatformCategories(partner.name);
+              const focusText = getPlatformFocus(partner.name);
 
               return (
                 <div
@@ -371,7 +311,7 @@ export default function MarketplaceBookingSection({
 
                     <div className="bg-zinc-50 border border-zinc-200/80 rounded-xl p-3 space-y-1.5">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-                        Available: {categories}
+                        Scope: {focusText}
                       </div>
                       <ul className="space-y-1">
                         {perks.slice(0, 3).map((perk) => (
@@ -389,15 +329,15 @@ export default function MarketplaceBookingSection({
 
                   <div className="pt-4 mt-4 border-t border-zinc-100 flex items-center justify-between gap-2">
                     <span className="text-[11px] font-medium text-zinc-500 truncate">
-                      Verified Global Checkout
+                      Opens external marketplace
                     </span>
                     <a
-                      href={partner.url || 'https://www.viator.com'}
+                      href={partner.url || 'https://www.getyourguide.com'}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-950 hover:bg-emerald-700 text-white text-xs font-bold transition-colors whitespace-nowrap shrink-0"
                     >
-                      <span>{partner.ctaLabel || `Go to ${partner.name}`}</span>
+                      <span>{partner.ctaLabel || `Explore on ${partner.name}`}</span>
                       <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                     </a>
                   </div>
@@ -407,23 +347,22 @@ export default function MarketplaceBookingSection({
           </div>
         </section>
 
-        {/* SECTION 2: AVAILABLE & TRENDING SERVICES WITH PER-PLATFORM LINKS */}
+        {/* Trending Attraction Tickets Only — Direct Marketplace Launch */}
         <section aria-labelledby="activities-heading" className="space-y-5">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
             <div>
               <div className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-700 mb-1">
                 <Flame className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Trending &amp; Available Services Across All Platforms</span>
+                <span>Trending Attractions on GetYourGuide &amp; Viator</span>
               </div>
               <h2
                 id="activities-heading"
                 className="text-lg sm:text-2xl font-extrabold text-zinc-950 tracking-tight"
               >
-                2. Select an Activity &amp; Choose Your Platform
+                Choose a Trending Attraction Ticket &amp; Book on Marketplace
               </h2>
             </div>
 
-            {/* Search & Trending Toggle */}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full lg:w-auto">
               <div className="relative flex items-center bg-white border border-zinc-200 rounded-xl px-3 py-2 flex-1 sm:w-72 focus-within:border-emerald-600">
                 <Search className="w-4 h-4 text-zinc-400 mr-2 shrink-0" />
@@ -431,7 +370,7 @@ export default function MarketplaceBookingSection({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search tour, pass, hotel..."
+                  placeholder="Search attraction pass or landmark..."
                   className="w-full text-xs sm:text-sm font-medium text-zinc-900 bg-transparent outline-none placeholder-zinc-400"
                 />
                 {searchQuery && (
@@ -446,75 +385,64 @@ export default function MarketplaceBookingSection({
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => setOnlyTrending((prev) => !prev)}
-                className={`px-3.5 py-2.5 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  onlyTrending
-                    ? 'bg-amber-400 text-zinc-950 border-amber-500'
-                    : 'bg-white text-zinc-800 border-zinc-200 hover:border-amber-400'
-                }`}
-              >
-                <Flame className="w-3.5 h-3.5 shrink-0" />
-                <span>Trending Only ({trendingCount})</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {[
+                  { id: 'all', label: 'All Portals' },
+                  { id: 'getyourguide', label: 'GetYourGuide' },
+                  { id: 'viator', label: 'Viator' }
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setPlatformFilter(tab.id as any)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap ${
+                      platformFilter === tab.id
+                        ? 'bg-zinc-950 text-white border-zinc-950'
+                        : 'bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Wrapped Systematic Category Filter Buttons (Zero horizontal page spillover) */}
-          <div className="flex flex-wrap items-center gap-2">
-            {[
-              { id: 'all', label: 'All Services' },
-              { id: 'tickets', label: 'Attraction Passes' },
-              { id: 'packages', label: 'Tour Packages' },
-              { id: 'hotels', label: 'Hotels & Resorts' },
-              { id: 'transport', label: 'Private Transfers' }
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveCategory(tab.id as CategoryFilter)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer border ${
-                  activeCategory === tab.id
-                    ? 'bg-zinc-950 text-white border-zinc-950'
-                    : 'bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Systematic Listings Grid */}
           {filteredItems.length === 0 ? (
-            <div className="bg-white border border-zinc-200 rounded-2xl p-8 text-center">
-              <p className="text-sm font-medium text-zinc-500">
-                No matching services found for your filter.
+            <div className="bg-white border border-zinc-200 rounded-2xl p-8 text-center space-y-3">
+              <TicketIcon className="w-8 h-8 text-zinc-400 mx-auto" />
+              <p className="text-sm font-medium text-zinc-600">
+                No trending attraction tickets matched your search on external marketplaces.
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveCategory('all');
-                  setOnlyTrending(false);
-                  setSearchQuery('');
-                }}
-                className="mt-4 px-4 py-2 bg-emerald-700 text-white text-xs font-bold rounded-xl cursor-pointer"
-              >
-                Reset Filters
-              </button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setPlatformFilter('all');
+                  }}
+                  className="px-4 py-2 bg-zinc-950 text-white text-xs font-bold rounded-xl cursor-pointer"
+                >
+                  Show All Marketplace Attractions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('/search')}
+                  className="px-4 py-2 bg-emerald-700 text-white text-xs font-bold rounded-xl cursor-pointer"
+                >
+                  Explore Website Holiday Packages, Hotels &amp; Transfers
+                </button>
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
               {filteredItems.map((item) => (
                 <div
-                  key={`${item.kind}-${item.id}`}
+                  key={item.id}
                   className="bg-white border border-zinc-200 hover:border-emerald-500/70 rounded-2xl overflow-hidden flex flex-col justify-between transition-colors shadow-2xs min-w-0"
                 >
                   <div>
-                    <div
-                      onClick={() => onNavigate('/package', { id: item.id })}
-                      className="relative h-44 bg-zinc-900 overflow-hidden cursor-pointer group"
-                    >
+                    <div className="relative h-44 bg-zinc-900 overflow-hidden group">
                       <img
                         src={item.image}
                         alt={item.title}
@@ -525,12 +453,10 @@ export default function MarketplaceBookingSection({
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent" />
-                      {item.trending && (
-                        <span className="absolute top-3 left-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-400 text-zinc-950 text-[11px] font-extrabold">
-                          <Flame className="w-3 h-3 shrink-0" />
-                          Trending
-                        </span>
-                      )}
+                      <span className="absolute top-3 left-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-400 text-zinc-950 text-[11px] font-extrabold">
+                        <Flame className="w-3 h-3 shrink-0" />
+                        Trending Attraction
+                      </span>
                       <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-xs text-white font-semibold">
                         <span className="flex items-center gap-1 min-w-0 truncate">
                           <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -545,20 +471,17 @@ export default function MarketplaceBookingSection({
 
                     <div className="p-4">
                       <div className="text-[11px] font-bold text-emerald-700 mb-1">
-                        {item.kindLabel}
+                        {item.category} · External Marketplace Listing
                       </div>
-                      <h3
-                        onClick={() => onNavigate('/package', { id: item.id })}
-                        className="text-sm sm:text-base font-extrabold text-zinc-950 leading-snug line-clamp-2 hover:text-emerald-700 cursor-pointer"
-                      >
+                      <h3 className="text-sm sm:text-base font-extrabold text-zinc-950 leading-snug line-clamp-2">
                         {item.title}
                       </h3>
 
                       <div className="mt-2.5 flex items-baseline gap-2 tabular-nums">
                         <span className="text-base sm:text-lg font-extrabold text-zinc-950">
-                          {formatPrice(item.priceMyr)}
+                          From {formatPrice(item.priceMyr)}
                         </span>
-                        <span className="text-xs text-zinc-500">{item.unitLabel}</span>
+                        <span className="text-xs text-zinc-500">/ pass</span>
                         {item.originalPriceMyr && item.originalPriceMyr > item.priceMyr && (
                           <span className="text-xs text-zinc-400 line-through">
                             {formatPrice(item.originalPriceMyr)}
@@ -568,26 +491,29 @@ export default function MarketplaceBookingSection({
                     </div>
                   </div>
 
-                  {/* Direct & External Marketplace Links */}
+                  {/* Strictly External Marketplace Links Only */}
                   <div className="px-4 pb-4 pt-3 border-t border-zinc-100 space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('/package', { id: item.id })}
-                      className="w-full py-2.5 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <span>Book Direct with GFK Holidays</span>
-                      <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-                    </button>
-
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Reserve directly on external marketplace:
+                    </div>
                     <div className="grid grid-cols-2 gap-1.5">
+                      <a
+                        href={item.getyourguideUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="py-2 px-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1 transition-colors truncate"
+                      >
+                        <span>GetYourGuide</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
                       <a
                         href={item.viatorUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="py-1.5 px-2 rounded-lg bg-zinc-50 hover:bg-emerald-50 border border-zinc-200 hover:border-emerald-400 text-[11px] font-bold text-zinc-800 inline-flex items-center justify-center gap-1 transition-colors truncate"
+                        className="py-2 px-2.5 rounded-xl bg-emerald-900 hover:bg-emerald-800 text-[#34E0A1] text-xs font-bold inline-flex items-center justify-center gap-1 transition-colors truncate"
                       >
                         <span>Viator</span>
-                        <ExternalLink className="w-3 h-3 text-emerald-700 shrink-0" />
+                        <ExternalLink className="w-3 h-3 shrink-0" />
                       </a>
                       <a
                         href={item.tripadvisorUrl}
@@ -597,15 +523,6 @@ export default function MarketplaceBookingSection({
                       >
                         <span>TripAdvisor</span>
                         <ExternalLink className="w-3 h-3 text-emerald-700 shrink-0" />
-                      </a>
-                      <a
-                        href={item.getyourguideUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="py-1.5 px-2 rounded-lg bg-zinc-50 hover:bg-orange-50 border border-zinc-200 hover:border-orange-300 text-[11px] font-bold text-zinc-800 inline-flex items-center justify-center gap-1 transition-colors truncate"
-                      >
-                        <span>GetYourGuide</span>
-                        <ExternalLink className="w-3 h-3 text-orange-600 shrink-0" />
                       </a>
                       <a
                         href={item.klookUrl}
@@ -622,6 +539,25 @@ export default function MarketplaceBookingSection({
               ))}
             </div>
           )}
+
+          {/* Clear Footer Banner Reminding Users Where Direct Website Services Live */}
+          <div className="bg-white border border-zinc-200 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-extrabold text-zinc-950">
+                Looking for Holiday Packages, Hotels &amp; Resorts, Private Transfers, or Dining?
+              </h3>
+              <p className="text-xs text-zinc-600 mt-0.5">
+                Those core travel services are booked directly on our website with Stripe Checkout. External marketplaces above showcase trending attraction tickets only.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/search')}
+              className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold whitespace-nowrap cursor-pointer shrink-0"
+            >
+              Browse Direct Website Catalog
+            </button>
+          </div>
         </section>
       </div>
     </div>

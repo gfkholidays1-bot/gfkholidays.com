@@ -39,6 +39,8 @@ interface CheckoutFormProps {
   currentUser: Agent | null;
   bookingEmail?: string;
   flightsEmail?: string;
+  assignedDeskEmail?: string;
+  serviceHierarchyLabel?: string;
   onConfirm: (
     clientName: string,
     email: string,
@@ -64,6 +66,8 @@ export function CheckoutForm({
   currentUser,
   bookingEmail = 'booking@gfkholidays.com',
   flightsEmail = 'flights@gfkholidays.com',
+  assignedDeskEmail,
+  serviceHierarchyLabel,
   onConfirm,
   onCancel,
   backLabel = 'Back',
@@ -164,7 +168,7 @@ export function CheckoutForm({
             <div className="flex items-start justify-between gap-3 border-b border-zinc-100 pb-3.5">
               <div>
                 <span className="text-xs font-bold text-emerald-700 uppercase tracking-wide block">
-                  {product?.category || 'Malaysia Experience'}
+                  {serviceHierarchyLabel || product?.category || 'Malaysia Experience'}
                 </span>
                 <h2 className="text-base font-extrabold text-zinc-950 leading-snug mt-0.5">
                   {productTitle}
@@ -432,7 +436,8 @@ export function CheckoutForm({
                 <span>Stripe Settlement &amp; Allotment Notice</span>
               </div>
               <p>
-                Bookings must be placed at least 24 hours in advance and are settled exclusively through Stripe in your selected settlement currency ({paymentCurrency}). All Stripe receipts, payment links, and billing support are managed via{' '}
+                Bookings must be placed at least 24 hours in advance and are settled directly on our platform in your selected currency ({paymentCurrency}). Service desk:{' '}
+                <strong className="text-amber-950">{assignedDeskEmail || bookingEmail}</strong> · Stripe billing &amp; receipts:{' '}
                 <strong className="text-amber-950">{bookingEmail}</strong>.
               </p>
               {(product?.category === 'Flight' || product?.isFlight) && (
@@ -471,6 +476,8 @@ interface BookingSuccessProps {
   userRole: 'guest' | 'customer' | 'agent' | 'admin';
   bookingEmail?: string;
   flightsEmail?: string;
+  assignedDeskEmail?: string;
+  serviceHierarchyLabel?: string;
   onNavigate: (path: string, params?: any) => void;
 }
 
@@ -480,6 +487,8 @@ export function BookingSuccess({
   userRole,
   bookingEmail = 'booking@gfkholidays.com',
   flightsEmail = 'flights@gfkholidays.com',
+  assignedDeskEmail,
+  serviceHierarchyLabel,
   onNavigate
 }: BookingSuccessProps) {
   const settledCurrency = (booking.currency as SupportedCurrency) || 'INR';
@@ -502,7 +511,12 @@ export function BookingSuccess({
           Booking &amp; Stripe Request Confirmed
         </h1>
         <p className="text-zinc-600 font-medium text-sm leading-relaxed mb-3">
-          Our operations team will verify your allotment within 30 minutes. All Stripe payment links, receipts &amp; billing confirmations come from{' '}
+          {serviceHierarchyLabel ? (
+            <>
+              Routed to <strong>{serviceHierarchyLabel}</strong> (<span className="font-bold text-zinc-800">{assignedDeskEmail || bookingEmail}</span>).{' '}
+            </>
+          ) : null}
+          All Stripe payment links, receipts &amp; billing confirmations come from{' '}
           <span className="font-bold text-zinc-800">{bookingEmail}</span>
           {(product?.category === 'Flight' || product?.isFlight) && (
             <>

@@ -752,45 +752,59 @@ export default function ProductDetail({
               <ArrowRight className="w-4 h-4 ml-2" />
             </button>
 
-            {/* Official Marketplace Options: Viator & TripAdvisor */}
-            <div className="pt-4 border-t border-zinc-100 space-y-2.5">
-              <div className="flex items-center justify-between text-[11px] font-bold text-zinc-700">
-                <span className="inline-flex items-center gap-1.5 text-emerald-700">
-                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                  Also Bookable via Marketplace
-                </span>
-                <span className="text-[10px] text-zinc-400">Free 24h Cancel</span>
+            {/* Official Marketplace Options: Strictly for Curated / Trending Attraction Tickets */}
+            {pkgId.startsWith('tk-') && Boolean(product?.marketplaceEnabled || product?.trending) && (
+              <div className="pt-4 border-t border-zinc-100 space-y-2.5">
+                <div className="flex items-center justify-between text-[11px] font-bold text-zinc-700">
+                  <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                    Also Trending on Marketplace
+                  </span>
+                  <span className="text-[10px] text-zinc-400">Attraction Tickets</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <a
+                    href={
+                      product.getyourguideUrl ||
+                      `https://www.getyourguide.com/s/?q=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="py-2 px-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-bold inline-flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                  >
+                    <span>GetYourGuide</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                  <a
+                    href={
+                      product.viatorUrl ||
+                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="py-2 px-2 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                  >
+                    <span>Viator</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                  <a
+                    href={
+                      product.tripadvisorUrl ||
+                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="py-2 px-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-[#34E0A1] text-[11px] font-bold inline-flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+                  >
+                    <span>TripAdvisor</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                </div>
+                <p className="text-[10px] text-zinc-500 text-center leading-relaxed">
+                  Selected trending attraction tickets may also be booked externally on GetYourGuide, Viator, or TripAdvisor.
+                </p>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <a
-                  href={
-                    product.viatorUrl ||
-                    `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="py-2.5 px-3 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-[#34E0A1] text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
-                >
-                  <span>Viator</span>
-                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                </a>
-                <a
-                  href={
-                    product.tripadvisorUrl ||
-                    `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="py-2.5 px-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-[#34E0A1] text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
-                >
-                  <span>TripAdvisor</span>
-                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                </a>
-              </div>
-              <p className="text-[10px] text-zinc-500 text-center leading-relaxed">
-                Reserve Now &amp; Pay Later options &amp; verified traveler protection available.
-              </p>
-            </div>
+            )}
 
           </div>
         </div>

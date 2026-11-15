@@ -137,6 +137,7 @@ export interface Hotel {
 export interface Ticket {
   id: string;
   name: string;
+  category?: string;
   location?: string;
   image: string;
   mediaUrls?: string[];
@@ -155,8 +156,32 @@ export interface Ticket {
   childPolicy?: string;
   featured?: boolean;
   trending?: boolean;
+  marketplaceEnabled?: boolean;
+  getyourguideUrl?: string;
+  klookUrl?: string;
   viatorUrl?: string;
   tripadvisorUrl?: string;
+}
+
+export type ServiceHierarchyKey =
+  | 'attractions'
+  | 'hotels'
+  | 'transfers'
+  | 'dining'
+  | 'packages'
+  | 'flights'
+  | 'payments';
+
+export interface EmailHierarchyRule {
+  key: ServiceHierarchyKey;
+  priority: number;
+  label: string;
+  description: string;
+  primaryEmail: string;
+  ccEmail?: string;
+  enabled: boolean;
+  sendCustomerCopy: boolean;
+  ccBillingDesk: boolean;
 }
 
 export interface Allotment {
@@ -342,6 +367,7 @@ export interface GlobalSettings {
   accountsEmail?: string;
   bookingEmail?: string;
   flightsEmail?: string;
+  emailHierarchyRouting?: Partial<Record<ServiceHierarchyKey, EmailHierarchyRule>>;
   bookingEmailToken?: string;
   accountsEmailToken?: string;
   partnerMarqueeEnabled?: boolean;

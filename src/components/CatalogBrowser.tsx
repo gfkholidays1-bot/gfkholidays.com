@@ -2229,36 +2229,6 @@ export default function CatalogBrowser({
                   )}
                 </div>
               )}
-
-              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold text-zinc-600">Book via Marketplace:</span>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={
-                      activePackageModal.viatorUrl ||
-                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <span>Viator</span>
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                  </a>
-                  <a
-                    href={
-                      activePackageModal.tripadvisorUrl ||
-                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <span>TripAdvisor</span>
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                  </a>
-                </div>
-              </div>
             </div>
 
             {/* Sticky Safe-Area Footer (Never Clipped by Bottom Bar) */}
@@ -2453,35 +2423,49 @@ export default function CatalogBrowser({
                 </div>
               )}
 
-              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold text-zinc-600">Book via Marketplace:</span>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={
-                      activeTicketModal.viatorUrl ||
-                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <span>Viator</span>
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                  </a>
-                  <a
-                    href={
-                      activeTicketModal.tripadvisorUrl ||
-                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <span>TripAdvisor</span>
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                  </a>
+              {Boolean(activeTicketModal.marketplaceEnabled || activeTicketModal.trending) && (
+                <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-zinc-600">Trending on Marketplace:</span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <a
+                      href={
+                        activeTicketModal.getyourguideUrl ||
+                        `https://www.getyourguide.com/s/?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1.5 rounded-lg bg-orange-600 text-white text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <span>GetYourGuide</span>
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                    <a
+                      href={
+                        activeTicketModal.viatorUrl ||
+                        `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <span>Viator</span>
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                    <a
+                      href={
+                        activeTicketModal.tripadvisorUrl ||
+                        `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <span>TripAdvisor</span>
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Sticky Safe-Area Footer (Never Clipped by Bottom Bar) */}
@@ -2664,36 +2648,6 @@ export default function CatalogBrowser({
                   )}
                 </div>
               )}
-
-              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold text-zinc-600">Book via Marketplace:</span>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={
-                      activeHotelModal.viatorUrl ||
-                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeHotelModal.name} Malaysia`)}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <span>Viator</span>
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                  </a>
-                  <a
-                    href={
-                      activeHotelModal.tripadvisorUrl ||
-                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeHotelModal.name} Malaysia`)}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <span>TripAdvisor</span>
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                  </a>
-                </div>
-              </div>
             </div>
 
             {/* Sticky Safe-Area Footer (Never Clipped by Bottom Bar) */}

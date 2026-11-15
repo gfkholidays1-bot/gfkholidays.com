@@ -103,6 +103,7 @@ export default function MobileB2CHome({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeBannerIdx, setActiveBannerIdx] = useState(0);
   const [selectedLocation, setSelectedLocation] = useState('ALL');
+  const [selectedQuickCategory, setSelectedQuickCategory] = useState('ALL');
   const [activeTab, setActiveTab] = useState<'all' | 'packages' | 'tickets' | 'hotels' | 'flights'>('all');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const mobileVideoRef = useRef<HTMLVideoElement>(null);
@@ -418,6 +419,69 @@ export default function MobileB2CHome({
     { id: 'Cameron', label: 'Cameron' }
   ];
 
+  const quickCategoryOptions: Array<{
+    id: string;
+    label: string;
+    targetId: string;
+    keywords: string[];
+  }> = [
+    { id: 'ALL', label: 'All Experiences', targetId: HOME_SECTIONS.packages, keywords: [] },
+    {
+      id: 'luxury',
+      label: 'Luxury Escapes',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['luxury', '5-star', '5 star', 'resort', 'villa', 'yacht', 'ritz', 'four seasons', 'mandarin', 'shangri', 'private']
+    },
+    {
+      id: 'family',
+      label: 'Family Fun',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['family', 'theme park', 'lagoon', 'skyworlds', 'aquaria', 'zoo', 'genting', 'sunway', 'cameron']
+    },
+    {
+      id: 'adventure',
+      label: 'Adventure',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['adventure', 'kinabalu', 'island', 'semporna', 'mabul', 'skybridge', 'sabah', 'langkawi', 'caves', 'cable']
+    },
+    {
+      id: 'transfers',
+      label: 'Private Transfers',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['transfer', 'chauffeur', 'klia', 'private', 'van', 'mpv']
+    },
+    {
+      id: 'attractions',
+      label: 'Attraction Tickets',
+      targetId: HOME_SECTIONS.tickets,
+      keywords: ['ticket', 'pass', 'tower', 'sky', 'park', 'cable']
+    },
+    {
+      id: 'hotels',
+      label: 'Hotels & Resorts',
+      targetId: HOME_SECTIONS.hotels,
+      keywords: ['hotel', 'resort', '5-star', '4-star', 'suite']
+    },
+    {
+      id: 'dining',
+      label: 'Dining',
+      targetId: HOME_SECTIONS.packages,
+      keywords: ['dining', 'food', 'dinner', 'michelin', 'restaurant', 'cruise', 'penang']
+    }
+  ];
+
+  const handleSelectQuickCategory = (catId: string) => {
+    setSelectedQuickCategory(catId);
+    const chosen = quickCategoryOptions.find((c) => c.id === catId);
+    const targetSection = chosen?.targetId || HOME_SECTIONS.packages;
+    if (catId === 'hotels') setActiveTab('hotels');
+    else if (catId === 'attractions') setActiveTab('tickets');
+    else setActiveTab('packages');
+    requestAnimationFrame(() => {
+      scrollToHomeSection(targetSection, false);
+    });
+  };
+
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onNavigate('/search', { query: searchQuery });
@@ -429,17 +493,39 @@ export default function MobileB2CHome({
     return text.toLowerCase().includes(selectedLocation.toLowerCase());
   };
 
-  const filteredPackages = packages.filter(
+  const matchesQuickCategory = (haystack: string) => {
+    if (selectedQuickCategory === 'ALL' || selectedQuickCategory === 'attractions' || selectedQuickCategory === 'hotels') {
+      return true;
+    }
+    const activeCat = quickCategoryOptions.find((c) => c.id === selectedQuickCategory);
+    if (!activeCat || activeCat.keywords.length === 0) return true;
+    const lower = haystack.toLowerCase();
+    return activeCat.keywords.some((kw) => lower.includes(kw));
+  };
+
+  const locPackages = packages.filter(
     (p) => matchesLocation(p.destination) || matchesLocation(p.title)
   );
+  const catPackages = locPackages.filter((p) =>
+    matchesQuickCategory(`${p.title} ${p.description} ${p.category} ${(p.tags || []).join(' ')} ${p.destination}`)
+  );
+  const filteredPackages = catPackages.length > 0 ? catPackages : locPackages;
 
-  const filteredTickets = tickets.filter(
+  const locTickets = tickets.filter(
     (t) => matchesLocation(t.location) || matchesLocation(t.name)
   );
+  const catTickets = locTickets.filter((t) =>
+    matchesQuickCategory(`${t.name} ${t.category || ''} ${t.location || ''} ${t.info || ''}`)
+  );
+  const filteredTickets = catTickets.length > 0 ? catTickets : locTickets;
 
-  const filteredHotels = hotels.filter(
+  const locHotels = hotels.filter(
     (h) => matchesLocation(h.location) || matchesLocation(h.name)
   );
+  const catHotels = locHotels.filter((h) =>
+    matchesQuickCategory(`${h.name} ${h.cat} ${h.location || ''} ${h.instructions || ''}`)
+  );
+  const filteredHotels = catHotels.length > 0 ? catHotels : locHotels;
 
   // Fast 1-Click Ticket Booking Dispatcher
   const handleInstantBookTicket = () => {
@@ -747,6 +833,24 @@ export default function MobileB2CHome({
                     }`}
                   >
                     {loc.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Compact Quick Category Strip Beneath Search (Filters & Scrolls Smoothly) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 no-scrollbar">
+                {quickCategoryOptions.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => handleSelectQuickCategory(cat.id)}
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap border ${
+                      selectedQuickCategory === cat.id
+                        ? 'bg-amber-400 text-zinc-950 border-amber-300 shadow-xs'
+                        : 'bg-zinc-950/50 text-amber-100 border-white/20 hover:bg-zinc-900/70 backdrop-blur-md'
+                    }`}
+                  >
+                    {cat.label}
                   </button>
                 ))}
               </div>
@@ -1067,6 +1171,53 @@ export default function MobileB2CHome({
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
+
+          {selectedQuickCategory !== 'ALL' && (
+            <div className="mx-3.5 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs font-bold text-amber-950">
+              <span>
+                Filtered: {quickCategoryOptions.find((c) => c.id === selectedQuickCategory)?.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedQuickCategory('ALL')}
+                className="text-amber-800 underline cursor-pointer"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
+          {selectedQuickCategory === 'transfers' && _transport.length > 0 && (
+            <div className="mx-3.5 mb-4 p-3 bg-blue-50/70 border border-blue-200 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-extrabold text-zinc-950 flex items-center gap-1.5">
+                  <Car className="w-3.5 h-3.5 text-blue-700" />
+                  Private Chauffeur Transfers
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('/transport')}
+                  className="text-[11px] font-bold text-blue-700 cursor-pointer"
+                >
+                  View All
+                </button>
+              </div>
+              <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-0.5">
+                {_transport.slice(0, 4).map((tr) => (
+                  <div
+                    key={tr.id}
+                    onClick={() => onNavigate('/package', { id: tr.id })}
+                    className="w-[210px] shrink-0 bg-white border border-zinc-200 rounded-xl p-2.5 cursor-pointer"
+                  >
+                    <div className="text-[11px] font-bold text-zinc-900 line-clamp-2">{tr.name}</div>
+                    <div className="text-xs font-extrabold text-blue-700 mt-1.5 tabular-nums">
+                      {formatPrice(Number(tr.car) || 0)} <span className="text-[10px] font-normal text-zinc-500">/ car</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex gap-3 overflow-x-auto overscroll-x-contain snap-x snap-mandatory px-3.5 pb-1 no-scrollbar">
             {filteredPackages.map((pkg) => (
@@ -1786,36 +1937,52 @@ export default function MobileB2CHome({
                     </div>
                   </div>
 
-                  {/* External Marketplace Options (Viator & TripAdvisor) */}
-                  <div className="p-2.5 bg-zinc-950/90 border border-zinc-800 rounded-xl flex items-center justify-between gap-2">
-                    <span className="text-[10px] font-semibold text-zinc-400">Also bookable via:</span>
-                    <div className="flex items-center gap-1.5">
-                      <a
-                        href={
-                          activeTicketModal.viatorUrl ||
-                          `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
-                      >
-                        <span>Viator</span>
-                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
-                      </a>
-                      <a
-                        href={
-                          activeTicketModal.tripadvisorUrl ||
-                          `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
-                      >
-                        <span>TripAdvisor</span>
-                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
-                      </a>
+                  {/* External Marketplace Options: Strictly Trending Attraction Tickets */}
+                  {Boolean(activeTicketModal.marketplaceEnabled || activeTicketModal.trending) && (
+                    <div className="p-2.5 bg-zinc-950/90 border border-zinc-800 rounded-xl space-y-1.5">
+                      <span className="text-[10px] font-semibold text-zinc-400 block">
+                        Trending on Marketplace (Attraction Tickets):
+                      </span>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <a
+                          href={
+                            activeTicketModal.getyourguideUrl ||
+                            `https://www.getyourguide.com/s/?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1.5 rounded-lg bg-orange-600 text-[10px] font-bold text-white inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                        >
+                          <span>GetYourGuide</span>
+                          <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                        </a>
+                        <a
+                          href={
+                            activeTicketModal.viatorUrl ||
+                            `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                        >
+                          <span>Viator</span>
+                          <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                        </a>
+                        <a
+                          href={
+                            activeTicketModal.tripadvisorUrl ||
+                            `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center justify-center gap-1 whitespace-nowrap"
+                        >
+                          <span>TripAdvisor</span>
+                          <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                        </a>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </>
               ) : (
                 /* Terms & Conditions Tab */
@@ -2329,35 +2496,6 @@ export default function MobileB2CHome({
                     </div>
                   )}
 
-                  <div className="p-2.5 bg-zinc-950/90 border border-zinc-800 rounded-xl flex items-center justify-between gap-2">
-                    <span className="text-[10px] font-semibold text-zinc-400">Or reserve via portal:</span>
-                    <div className="flex items-center gap-1.5">
-                      <a
-                        href={
-                          activePackageModal.viatorUrl ||
-                          `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
-                      >
-                        <span>Viator</span>
-                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
-                      </a>
-                      <a
-                        href={
-                          activePackageModal.tripadvisorUrl ||
-                          `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
-                      >
-                        <span>TripAdvisor</span>
-                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
-                      </a>
-                    </div>
-                  </div>
                 </div>
               )}
             </div>

@@ -33,6 +33,10 @@ import {
   detectGeoCurrency
 } from './lib/currency';
 import { isHomeSectionId, scrollToHomeSection } from './lib/homeSections';
+import {
+  resolveBookingMailDispatch,
+  dispatchTransactionalEmail
+} from './lib/mailRouting';
 import { Sparkles } from 'lucide-react';
 
 function useBrowserGeolocationCurrency() {
@@ -430,51 +434,54 @@ export default function App() {
 
     try {
       const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
-      await fetch('/api/send-email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify({
-          to: flightsDeskEmail,
+      const flightsDispatch = resolveBookingMailDispatch({ category: 'Flight', isFlight: true }, globalSettings);
+      const effectiveFlightsEmail = flightsDispatch.primaryRecipient || flightsDeskEmail;
+
+      await dispatchTransactionalEmail(
+        {
+          to: effectiveFlightsEmail,
+          cc: flightsDispatch.ccRecipients,
           replyTo: payload.customerEmail,
+          categoryKey: 'flights',
+          categoryLabel: flightsDispatch.rule.label,
+          bookingId: newInquiry.id,
           subject: `[FLIGHT INQUIRY ${newInquiry.id}] ${payload.airline}${payload.flightCode ? ` (${payload.flightCode})` : ''} · ${payload.origin} → ${payload.destination}`,
           html: `<div style="font-family: sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
-            <h2 style="margin-top: 0; color: #0369a1;">New Website Flight Fare / Desk Inquiry (${newInquiry.id})</h2>
-            <p><strong>Routed To:</strong> ${flightsDeskEmail}</p>
-            <p><strong>Inquiry Type:</strong> ${payload.inquiryType}</p>
-            <p><strong>Airline:</strong> ${payload.airline} ${payload.flightCode ? `(${payload.flightCode})` : ''}</p>
-            <p><strong>Route:</strong> ${payload.origin} → ${payload.destination}</p>
-            <p><strong>Travel Date:</strong> ${payload.departureDate} · <strong>Passengers:</strong> ${payload.pax}</p>
-            <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 16px 0;" />
-            <p><strong>Customer:</strong> ${payload.customerName} (${payload.customerEmail})</p>
-            <p><strong>Phone / WhatsApp:</strong> ${payload.customerPhone}</p>
-            <p><strong>Notes:</strong> ${payload.notes || '-'}</p>
-          </div>`
-        })
-      });
+          <h2 style="margin-top: 0; color: #0369a1;">New Website Flight Fare / Desk Inquiry (${newInquiry.id})</h2>
+          <p><strong>Service Tier:</strong> ${flightsDispatch.rule.label}</p>
+          <p><strong>Routed To:</strong> ${effectiveFlightsEmail}</p>
+          <p><strong>Inquiry Type:</strong> ${payload.inquiryType}</p>
+          <p><strong>Airline:</strong> ${payload.airline} ${payload.flightCode ? `(${payload.flightCode})` : ''}</p>
+          <p><strong>Route:</strong> ${payload.origin} → ${payload.destination}</p>
+          <p><strong>Travel Date:</strong> ${payload.departureDate} · <strong>Passengers:</strong> ${payload.pax}</p>
+          <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 16px 0;" />
+          <p><strong>Customer:</strong> ${payload.customerName} (${payload.customerEmail})</p>
+          <p><strong>Phone / WhatsApp:</strong> ${payload.customerPhone}</p>
+          <p><strong>Notes:</strong> ${payload.notes || '-'}</p>
+        </div>`
+        },
+        token
+      );
 
-      if (payload.customerEmail) {
-        await fetch('/api/send-email', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: token ? `Bearer ${token}` : ''
-          },
-          body: JSON.stringify({
+      if (flightsDispatch.sendCustomerCopy && payload.customerEmail) {
+        await dispatchTransactionalEmail(
+          {
             to: payload.customerEmail,
-            replyTo: flightsDeskEmail,
+            replyTo: effectiveFlightsEmail,
+            categoryKey: 'flights',
+            categoryLabel: flightsDispatch.rule.label,
+            bookingId: `${newInquiry.id}-CUST`,
             subject: `Flight Quote Request Received [${newInquiry.id}] - ${payload.origin} to ${payload.destination}`,
             html: `<div style="font-family: sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
-              <h2 style="margin-top: 0;">Flight Inquiry Received</h2>
-              <p>Dear ${payload.customerName},</p>
-              <p>Your airline fare quote / flight inquiry (<strong>${newInquiry.id}</strong>) has been routed to our Flight Desk at <strong>${flightsDeskEmail}</strong>.</p>
-              <p><strong>Route:</strong> ${payload.origin} → ${payload.destination} (${payload.departureDate}, ${payload.pax} pax)</p>
-              <p style="font-size: 12px; color: #52525b;">Note: All payment &amp; bank transfer matters are handled by ${globalSettings?.bookingEmail || 'booking@gfkholidays.com'}.</p>
-            </div>`
-          })
-        });
+            <h2 style="margin-top: 0;">Flight Inquiry Received</h2>
+            <p>Dear ${payload.customerName},</p>
+            <p>Your airline fare quote / flight inquiry (<strong>${newInquiry.id}</strong>) has been routed to our Flight Desk at <strong>${effectiveFlightsEmail}</strong>.</p>
+            <p><strong>Route:</strong> ${payload.origin} → ${payload.destination} (${payload.departureDate}, ${payload.pax} pax)</p>
+            <p style="font-size: 12px; color: #52525b;">Note: All payment &amp; Stripe billing matters are handled by ${flightsDispatch.billingEmail}.</p>
+          </div>`
+          },
+          token
+        );
       }
     } catch (err) {
       console.error('Flight inquiry email dispatch warning:', err);
@@ -577,28 +584,29 @@ export default function App() {
         ? globalSettings.logoUrl
         : `${window.location.origin}${globalSettings?.logoUrl || '/android-chrome-512x512.png'}`;
 
+    const dispatch = resolveBookingMailDispatch(productItem, globalSettings);
     const requestReceivedHtml = `
 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: 40px auto; color: #3f3f46; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); background: #ffffff;">
   <div style="padding: 30px;">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
       <div style="display: flex; align-items: center; gap: 12px;">
         <img src="${activeLogoSrc}" alt="GFK Logo" style="height: 44px; width: 44px; object-fit: contain;" />
         <div>
           <h1 style="font-size: 24px; font-weight: 800; color: #18181b; margin: 0; letter-spacing: -0.5px;">GFK <span style="color: #059669; font-weight: 400;">Holidays</span></h1>
-          <p style="font-size: 10px; font-weight: 700; color: #a1a1aa; text-transform: uppercase; margin: 5px 0 0 0; letter-spacing: 0.5px;">Booking Request Received</p>
+          <p style="font-size: 10px; font-weight: 700; color: #059669; text-transform: uppercase; margin: 5px 0 0 0; letter-spacing: 0.5px;">${dispatch.rule.label} · ${voucherCode}</p>
         </div>
       </div>
     </div>
     
-    <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 0 0 30px 0;" />
+    <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 0 0 24px 0;" />
 
     <p style="font-size: 14px; font-weight: 700; color: #18181b; margin: 0 0 10px 0;">Dear ${clientName.toUpperCase()},</p>
-    <p style="font-size: 13px; line-height: 1.6; margin: 0 0 25px 0; color: #52525b;">We have received your booking request for <strong>${productItem?.title || productItem?.name || 'Service'}</strong>.</p>
-    <p style="font-size: 13px; line-height: 1.6; margin: 0 0 25px 0; color: #52525b;">We are currently reviewing your request with the operator to ensure availability. Once confirmed, we will send you the official invoice and payment instructions.</p>
+    <p style="font-size: 13px; line-height: 1.6; margin: 0 0 18px 0; color: #52525b;">We have received your booking request for <strong>${productItem?.title || productItem?.name || 'Service'}</strong> (${dispatch.rule.label}).</p>
+    <p style="font-size: 13px; line-height: 1.6; margin: 0 0 22px 0; color: #52525b;">Assigned operations desk: <strong>${dispatch.primaryRecipient}</strong> · Stripe Billing: <strong>${dispatch.billingEmail}</strong>.</p>
     
-    <div style="background-color: #fefce8; border: 1px solid #fef08a; padding: 20px; border-radius: 12px; margin-bottom: 25px;">
+    <div style="background-color: #fefce8; border: 1px solid #fef08a; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
       <p style="margin: 0 0 10px 0; font-size: 12px; font-weight: 700; color: #9a3412;">
-        Next Steps & Reservation Policy:
+        Next Steps &amp; Reservation Policy:
       </p>
       <p style="margin: 0; font-size: 12px; color: #9a3412; line-height: 1.5;">${customMessage}</p>
     </div>
@@ -607,43 +615,52 @@ export default function App() {
 
     try {
       const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
-      const adminEmail = globalSettings?.bookingEmail || 'booking@gfkholidays.com';
 
-      await fetch('/api/send-email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: token ? `Bearer ${token}` : ''
+      const deptResult = await dispatchTransactionalEmail(
+        {
+          to: dispatch.primaryRecipient,
+          cc: dispatch.ccRecipients,
+          replyTo: email,
+          categoryKey: dispatch.categoryKey,
+          categoryLabel: dispatch.rule.label,
+          bookingId: voucherCode,
+          subject: `[NEW ${dispatch.rule.label.toUpperCase()}] ${productItem.title || productItem.name} - ${voucherCode}`,
+          html: `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
+          <h2 style="margin-top: 0;">New Booking Received (${dispatch.rule.label})</h2>
+          <p><strong>Booking ID:</strong> ${voucherCode}</p>
+          <p><strong>Hierarchy Tier:</strong> #${dispatch.rule.priority} · ${dispatch.rule.label}</p>
+          <p><strong>Assigned Desk:</strong> ${dispatch.primaryRecipient}${dispatch.ccRecipients.length ? ` (CC: ${dispatch.ccRecipients.join(', ')})` : ''}</p>
+          <p><strong>Customer:</strong> ${clientName} (${email})</p>
+          <p><strong>Phone:</strong> ${phone}</p>
+          <p><strong>Product:</strong> ${productItem.title || productItem.name}</p>
+          <p><strong>Travel Date:</strong> ${newBooking.date}</p>
+          <p><strong>Base Amount (MYR):</strong> RM ${checkoutTotal.toLocaleString()}</p>
+          ${stripeMeta?.chargedAmount ? `<p><strong>Stripe Payable (${stripeMeta.currency} @ ${stripeMeta.xeRate.toFixed(4)}):</strong> ${formatCurrencyValue(stripeMeta.chargedAmount, stripeMeta.currency as SupportedCurrency, true)}</p>` : ''}
+          <p><strong>Payment Method:</strong> ${paymentMethod.toUpperCase()}</p>
+          <p>Log into the admin portal (/admin) to confirm, move mail desk, or invoice this booking.</p>
+        </div>`
         },
-        body: JSON.stringify({
-          to: email,
-          subject: `Booking Request Received: ${productItem.title || productItem.name} [${voucherCode}]`,
-          html: requestReceivedHtml
-        })
-      });
+        token
+      );
 
-      await fetch('/api/send-email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify({
-          to: adminEmail,
-          subject: `[NEW BOOKING ALERT] ${productItem.title || productItem.name} - ${voucherCode}`,
-          html: `<div style="font-family: sans-serif; padding: 20px;">
-            <h2>New Booking Received!</h2>
-            <p><strong>Booking ID:</strong> ${voucherCode}</p>
-            <p><strong>Customer:</strong> ${clientName} (${email})</p>
-            <p><strong>Phone:</strong> ${phone}</p>
-            <p><strong>Product:</strong> ${productItem.title || productItem.name}</p>
-            <p><strong>Base Amount (MYR):</strong> RM ${checkoutTotal.toLocaleString()}</p>
-            ${stripeMeta?.chargedAmount ? `<p><strong>Stripe Payable (${stripeMeta.currency} @ ${stripeMeta.xeRate.toFixed(4)}):</strong> ${formatCurrencyValue(stripeMeta.chargedAmount, stripeMeta.currency as SupportedCurrency, true)}</p>` : ''}
-            <p><strong>Payment Method:</strong> ${paymentMethod.toUpperCase()}</p>
-            <p>Log into the admin portal (/admin) to confirm and invoice this booking.</p>
-          </div>`
-        })
-      });
+      if (dispatch.sendCustomerCopy && email) {
+        await dispatchTransactionalEmail(
+          {
+            to: email,
+            replyTo: dispatch.primaryRecipient,
+            categoryKey: dispatch.categoryKey,
+            categoryLabel: dispatch.rule.label,
+            bookingId: `${voucherCode}-CUST`,
+            subject: `Booking Request Received: ${productItem.title || productItem.name} [${voucherCode}]`,
+            html: requestReceivedHtml
+          },
+          token
+        );
+      }
+
+      if (!deptResult.ok) {
+        console.warn('Department mail dispatch note:', deptResult.error || deptResult.code);
+      }
     } catch (err) {
       console.error('Failed to trigger email API', err);
     }
@@ -905,38 +922,48 @@ export default function App() {
         )}
 
         {/* Path: CHECKOUT FORM */}
-        {currentPath === '/checkout' && routeParams.product && (
-          <CheckoutForm
-            product={routeParams.product}
-            pax={routeParams.pax}
-            date={routeParams.date}
-            optionName={routeParams.optionName}
-            timeSlot={routeParams.timeSlot}
-            displayPrice={routeParams.displayPrice}
-            total={routeParams.total}
-            commission={routeParams.commission}
-            userRole={userRole}
-            currentUser={currentAgent}
-            bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
-            flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
-            onConfirm={handleConfirmCheckout}
-            onCancel={handleGoBack}
-            backLabel={getRouteLabel(navHistory[navHistory.length - 1]?.path || '/')}
-            showToast={showToast}
-          />
-        )}
+        {currentPath === '/checkout' && routeParams.product && (() => {
+          const checkoutDispatch = resolveBookingMailDispatch(routeParams.product, globalSettings);
+          return (
+            <CheckoutForm
+              product={routeParams.product}
+              pax={routeParams.pax}
+              date={routeParams.date}
+              optionName={routeParams.optionName}
+              timeSlot={routeParams.timeSlot}
+              displayPrice={routeParams.displayPrice}
+              total={routeParams.total}
+              commission={routeParams.commission}
+              userRole={userRole}
+              currentUser={currentAgent}
+              bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
+              flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
+              assignedDeskEmail={checkoutDispatch.primaryRecipient}
+              serviceHierarchyLabel={checkoutDispatch.rule.label}
+              onConfirm={handleConfirmCheckout}
+              onCancel={handleGoBack}
+              backLabel={getRouteLabel(navHistory[navHistory.length - 1]?.path || '/')}
+              showToast={showToast}
+            />
+          );
+        })()}
 
         {/* Path: SUCCESS CONFIRMATION VOUCHER */}
-        {currentPath === '/booking-success' && (
-          <BookingSuccess
-            booking={routeParams.booking}
-            product={routeParams.product}
-            userRole={userRole}
-            bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
-            flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
-            onNavigate={handleNavigate}
-          />
-        )}
+        {currentPath === '/booking-success' && (() => {
+          const successDispatch = resolveBookingMailDispatch(routeParams.product, globalSettings);
+          return (
+            <BookingSuccess
+              booking={routeParams.booking}
+              product={routeParams.product}
+              userRole={userRole}
+              bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
+              flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
+              assignedDeskEmail={successDispatch.primaryRecipient}
+              serviceHierarchyLabel={successDispatch.rule.label}
+              onNavigate={handleNavigate}
+            />
+          );
+        })()}
 
         {/* Path: B2B AGENT CORE HUB */}
         {currentPath === '/agent' && currentAgent && (

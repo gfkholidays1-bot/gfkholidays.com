@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,6 +11,8 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const VIDEOS_DIR = path.join(DATA_DIR, 'videos');
 const STORE_FILE = path.join(DATA_DIR, 'cms-store.json');
+const SMTP_CONFIG_FILE = path.join(DATA_DIR, 'smtp-config.json');
+const MAIL_LOGS_FILE = path.join(DATA_DIR, 'mail-logs.json');
 
 const CONFIG_FILE = path.join(__dirname, 'firebase-applet-config.json');
 function getServerFirebaseConfig(): { projectId: string; databaseId: string; apiKey: string } {
@@ -754,8 +757,375 @@ async function startServer() {
     }
   });
 
-  app.post('/api/send-email', (_req, res) => {
-    return res.json({ ok: true, message: 'Email queued' });
+  interface ServerSmtpConfig {
+    smtpHost: string;
+    smtpPort: string;
+    smtpUser: string;
+    smtpPass: string;
+    fromEmail: string;
+    fromName: string;
+    updatedAt?: string;
+  }
+
+  interface MailDispatchLog {
+    id: string;
+    timestamp: string;
+    bookingId?: string;
+    categoryKey?: string;
+    categoryLabel?: string;
+    to: string;
+    cc?: string;
+    subject: string;
+    status: 'SENT' | 'FAILED';
+    provider: 'smtp' | 'resend' | 'none';
+    messageId?: string;
+    error?: string;
+  }
+
+  const readServerSmtpConfig = (): ServerSmtpConfig => {
+    let saved: Partial<ServerSmtpConfig> = {};
+    try {
+      if (fs.existsSync(SMTP_CONFIG_FILE)) {
+        saved = JSON.parse(fs.readFileSync(SMTP_CONFIG_FILE, 'utf-8')) || {};
+      }
+    } catch (_e) {}
+
+    return {
+      smtpHost: String(saved.smtpHost || process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
+      smtpPort: String(saved.smtpPort || process.env.SMTP_PORT || '465').trim(),
+      smtpUser: String(saved.smtpUser || process.env.SMTP_USER || '').trim(),
+      smtpPass: String(saved.smtpPass || process.env.SMTP_PASS || '').trim(),
+      fromEmail: String(
+        saved.fromEmail || process.env.SMTP_FROM || saved.smtpUser || process.env.SMTP_USER || 'booking@gfkholidays.com'
+      ).trim(),
+      fromName: String(saved.fromName || process.env.SMTP_FROM_NAME || 'GFK Holidays Malaysia').trim(),
+      updatedAt: saved.updatedAt
+    };
+  };
+
+  const writeServerSmtpConfig = (next: ServerSmtpConfig) => {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(SMTP_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf-8');
+  };
+
+  const readMailLogs = (): MailDispatchLog[] => {
+    try {
+      if (fs.existsSync(MAIL_LOGS_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(MAIL_LOGS_FILE, 'utf-8'));
+        return Array.isArray(parsed) ? parsed : [];
+      }
+    } catch (_e) {}
+    return [];
+  };
+
+  const appendMailLog = (entry: MailDispatchLog) => {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const existing = readMailLogs();
+      const next = [entry, ...existing].slice(0, 200);
+      fs.writeFileSync(MAIL_LOGS_FILE, JSON.stringify(next, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[Mail Logs] Failed writing mail dispatch log:', err);
+    }
+  };
+
+  const buildSmtpTransporter = (cfg: { host: string; port: string; user: string; pass: string }) => {
+    const portNum = Number(cfg.port) || 465;
+    return nodemailer.createTransport({
+      host: cfg.host || 'smtp.gmail.com',
+      port: portNum,
+      secure: portNum === 465,
+      auth: {
+        user: cfg.user,
+        pass: cfg.pass
+      },
+      connectionTimeout: 12000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000
+    });
+  };
+
+  app.get('/api/smtp-config', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const cfg = readServerSmtpConfig();
+    return res.json({
+      ok: true,
+      configured: Boolean((cfg.smtpUser && cfg.smtpPass) || process.env.RESEND_API_KEY),
+      smtpHost: cfg.smtpHost,
+      smtpPort: cfg.smtpPort,
+      smtpUser: cfg.smtpUser,
+      hasPass: Boolean(cfg.smtpPass),
+      fromEmail: cfg.fromEmail,
+      fromName: cfg.fromName,
+      hasResendKey: Boolean(process.env.RESEND_API_KEY),
+      updatedAt: cfg.updatedAt || null
+    });
+  });
+
+  app.post('/api/smtp-config', async (req, res) => {
+    try {
+      const current = readServerSmtpConfig();
+      const body = req.body || {};
+      const next: ServerSmtpConfig = {
+        smtpHost: String(body.smtpHost ?? current.smtpHost ?? 'smtp.gmail.com').trim(),
+        smtpPort: String(body.smtpPort ?? current.smtpPort ?? '465').trim(),
+        smtpUser: String(body.smtpUser ?? current.smtpUser ?? '').trim(),
+        smtpPass:
+          typeof body.smtpPass === 'string' && body.smtpPass.trim()
+            ? body.smtpPass.trim()
+            : current.smtpPass,
+        fromEmail: String(
+          body.fromEmail ?? current.fromEmail ?? body.smtpUser ?? 'booking@gfkholidays.com'
+        ).trim(),
+        fromName: String(body.fromName ?? current.fromName ?? 'GFK Holidays Malaysia').trim(),
+        updatedAt: new Date().toISOString()
+      };
+
+      writeServerSmtpConfig(next);
+
+      if (body.verify) {
+        if (!next.smtpUser || !next.smtpPass) {
+          return res.status(400).json({
+            ok: false,
+            code: 'SMTP_MISSING_CREDENTIALS',
+            error: 'Please enter both SMTP username and app password before verifying.'
+          });
+        }
+        const transporter = buildSmtpTransporter({
+          host: next.smtpHost,
+          port: next.smtpPort,
+          user: next.smtpUser,
+          pass: next.smtpPass
+        });
+        await transporter.verify();
+      }
+
+      return res.json({
+        ok: true,
+        configured: Boolean((next.smtpUser && next.smtpPass) || process.env.RESEND_API_KEY),
+        smtpHost: next.smtpHost,
+        smtpPort: next.smtpPort,
+        smtpUser: next.smtpUser,
+        hasPass: Boolean(next.smtpPass),
+        fromEmail: next.fromEmail,
+        fromName: next.fromName,
+        updatedAt: next.updatedAt
+      });
+    } catch (err: any) {
+      return res.status(502).json({
+        ok: false,
+        code: 'SMTP_VERIFY_FAILED',
+        error: err?.message || 'SMTP server verification failed'
+      });
+    }
+  });
+
+  app.get('/api/mail-logs', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, logs: readMailLogs() });
+  });
+
+  app.delete('/api/mail-logs', (_req, res) => {
+    try {
+      if (fs.existsSync(MAIL_LOGS_FILE)) {
+        fs.writeFileSync(MAIL_LOGS_FILE, '[]', 'utf-8');
+      }
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || 'Failed to clear mail logs' });
+    }
+  });
+
+  app.post('/api/send-email', async (req, res) => {
+    const body = req.body || {};
+    const rawTo = Array.isArray(body.to) ? body.to.join(', ') : String(body.to || '').trim();
+    const rawCc = Array.isArray(body.cc)
+      ? body.cc.filter(Boolean).join(', ')
+      : String(body.cc || '').trim();
+    const subject = String(body.subject || '').trim() || 'GFK Holidays Notification';
+    const html = String(body.html || '');
+    const text = String(body.text || '').trim();
+    const replyTo = String(body.replyTo || '').trim();
+    const categoryKey = body.categoryKey ? String(body.categoryKey) : undefined;
+    const categoryLabel = body.categoryLabel ? String(body.categoryLabel) : undefined;
+    const bookingId = body.bookingId ? String(body.bookingId) : undefined;
+
+    if (!rawTo) {
+      return res.status(400).json({
+        ok: false,
+        code: 'MISSING_RECIPIENT',
+        error: 'Recipient email address (to) is required.'
+      });
+    }
+
+    const storedSmtp = readServerSmtpConfig();
+    const smtpHost = String(body.smtpHost || storedSmtp.smtpHost || 'smtp.gmail.com').trim();
+    const smtpPort = String(body.smtpPort || storedSmtp.smtpPort || '465').trim();
+    const smtpUser = String(body.smtpUser || storedSmtp.smtpUser || '').trim();
+    const smtpPass = String(body.smtpPass || storedSmtp.smtpPass || '').trim();
+    const fromEmail = String(body.fromEmail || storedSmtp.fromEmail || smtpUser || 'booking@gfkholidays.com').trim();
+    const fromName = String(body.fromName || storedSmtp.fromName || 'GFK Holidays Malaysia').trim();
+    const resendKey = process.env.RESEND_API_KEY;
+
+    const logId = `MAIL-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const nowIso = new Date().toISOString();
+
+    if (smtpUser && smtpPass) {
+      try {
+        const transporter = buildSmtpTransporter({
+          host: smtpHost,
+          port: smtpPort,
+          user: smtpUser,
+          pass: smtpPass
+        });
+        const fromHeader = fromName ? `"${fromName.replace(/"/g, '')}" <${smtpUser}>` : smtpUser;
+        const info = await transporter.sendMail({
+          from: fromHeader,
+          to: rawTo,
+          cc: rawCc || undefined,
+          replyTo: replyTo || fromEmail || smtpUser,
+          subject,
+          html: html || undefined,
+          text: text || undefined
+        });
+
+        appendMailLog({
+          id: logId,
+          timestamp: nowIso,
+          bookingId,
+          categoryKey,
+          categoryLabel,
+          to: rawTo,
+          cc: rawCc || undefined,
+          subject,
+          status: 'SENT',
+          provider: 'smtp',
+          messageId: info.messageId
+        });
+
+        return res.json({
+          ok: true,
+          provider: 'smtp',
+          messageId: info.messageId,
+          accepted: info.accepted,
+          deliveredTo: rawTo,
+          cc: rawCc || undefined
+        });
+      } catch (err: any) {
+        const errMsg = err?.message || 'SMTP transport failed';
+        appendMailLog({
+          id: logId,
+          timestamp: nowIso,
+          bookingId,
+          categoryKey,
+          categoryLabel,
+          to: rawTo,
+          cc: rawCc || undefined,
+          subject,
+          status: 'FAILED',
+          provider: 'smtp',
+          error: errMsg
+        });
+        return res.status(502).json({
+          ok: false,
+          code: 'SMTP_SEND_FAILED',
+          error: errMsg
+        });
+      }
+    }
+
+    if (resendKey) {
+      try {
+        const resendPayload: Record<string, any> = {
+          from: `${fromName} <${fromEmail}>`,
+          to: rawTo.split(',').map((s) => s.trim()).filter(Boolean),
+          subject,
+          html: html || `<p>${text}</p>`,
+          reply_to: replyTo || fromEmail
+        };
+        if (rawCc) {
+          resendPayload.cc = rawCc.split(',').map((s) => s.trim()).filter(Boolean);
+        }
+
+        const rRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${resendKey}`
+          },
+          body: JSON.stringify(resendPayload)
+        });
+        const rData: any = await rRes.json().catch(() => ({}));
+        if (!rRes.ok) {
+          throw new Error(rData?.message || `Resend HTTP ${rRes.status}`);
+        }
+
+        appendMailLog({
+          id: logId,
+          timestamp: nowIso,
+          bookingId,
+          categoryKey,
+          categoryLabel,
+          to: rawTo,
+          cc: rawCc || undefined,
+          subject,
+          status: 'SENT',
+          provider: 'resend',
+          messageId: rData?.id
+        });
+        return res.json({
+          ok: true,
+          provider: 'resend',
+          messageId: rData?.id,
+          deliveredTo: rawTo,
+          cc: rawCc || undefined
+        });
+      } catch (err: any) {
+        const errMsg = err?.message || 'Resend dispatch failed';
+        appendMailLog({
+          id: logId,
+          timestamp: nowIso,
+          bookingId,
+          categoryKey,
+          categoryLabel,
+          to: rawTo,
+          cc: rawCc || undefined,
+          subject,
+          status: 'FAILED',
+          provider: 'resend',
+          error: errMsg
+        });
+        return res.status(502).json({
+          ok: false,
+          code: 'RESEND_SEND_FAILED',
+          error: errMsg
+        });
+      }
+    }
+
+    const missingMsg = 'SMTP credentials are not configured yet. Open Admin Portal -> Email Routing to set SMTP Host, Port, Username, and App Password.';
+    appendMailLog({
+      id: logId,
+      timestamp: nowIso,
+      bookingId,
+      categoryKey,
+      categoryLabel,
+      to: rawTo,
+      cc: rawCc || undefined,
+      subject,
+      status: 'FAILED',
+      provider: 'none',
+      error: missingMsg
+    });
+    return res.status(400).json({
+      ok: false,
+      code: 'SMTP_NOT_CONFIGURED',
+      error: missingMsg
+    });
   });
 
   // Multi-Currency FX Market Rate Proxy (MYR base -> INR, USD, SGD, GBP, EUR, AED, AUD) with 2-minute cache
