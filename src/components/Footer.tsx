@@ -45,11 +45,11 @@ export default function Footer({
   const activeSocials = socialChannels.filter((s) => s.enabled !== false);
 
   return (
-    <footer className="bg-zinc-950 text-white pt-10 pb-6 border-t border-zinc-800 mt-auto">
+    <footer className="w-full max-w-full overflow-x-clip bg-zinc-950 text-white pt-10 pb-6 border-t border-zinc-800 mt-auto">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 pb-12 border-b border-zinc-800/80">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-12 pb-12 border-b border-zinc-800/80">
           {/* Brand Column */}
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             <div className="flex items-center gap-3">
               <img
                 src={resolvedLogo}
@@ -63,7 +63,7 @@ export default function Footer({
                 referrerPolicy="no-referrer"
                 className="h-12 w-auto max-h-14 object-contain shrink-0"
               />
-              <div>
+              <div className="min-w-0">
                 <span className="text-xl font-extrabold tracking-tight text-white block leading-none">
                   GFK Holidays
                 </span>
@@ -94,7 +94,7 @@ export default function Footer({
           </div>
 
           {/* Malaysia Destinations & Services */}
-          <div>
+          <div className="min-w-0">
             <h4 className="text-base font-bold mb-5 tracking-tight text-zinc-100">
               Malaysia Experiences
             </h4>
@@ -143,14 +143,23 @@ export default function Footer({
           </div>
 
           {/* Other Services: Restaurants, Transport Services & Cruises */}
-          <div>
+          <div className="min-w-0">
             <h4 className="text-base font-bold mb-4 tracking-tight text-zinc-100">
-              Other Services &amp; Exploration
+              Other Services &amp; Portals
             </h4>
             <p className="text-xs text-zinc-400 leading-relaxed mb-3">
-              Search and book dining, transport, and cruises together.
+              Book direct or through verified global travel marketplaces.
             </p>
             <ul className="space-y-2.5 text-zinc-400 text-sm">
+              <li>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('/marketplaces')}
+                  className="hover:text-emerald-400 transition-colors text-left cursor-pointer flex items-center gap-1.5 font-semibold text-emerald-300"
+                >
+                  <span>🌐</span> Marketplace Booking (Viator / GYG)
+                </button>
+              </li>
               <li>
                 <button
                   type="button"
@@ -182,23 +191,23 @@ export default function Footer({
           </div>
 
           {/* Contact Details */}
-          <div>
+          <div className="min-w-0">
             <h4 className="text-base font-bold mb-5 tracking-tight text-zinc-100">
               Kuala Lumpur Headquarters
             </h4>
             <ul className="space-y-3.5 text-zinc-400 text-sm">
               <li className="flex items-start">
                 <MapPin className="w-4 h-4 mr-2.5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <span>
+                <span className="min-w-0 break-words">
                   299a First Floor, Jalan Pudu, Pudu, 55100 Kuala Lumpur, Wilayah Persekutuan Kuala Lumpur, Malaysia
                 </span>
               </li>
               <li className="flex items-start">
                 <Mail className="w-4 h-4 mr-2.5 text-emerald-400 flex-shrink-0 mt-1" />
-                <div className="flex flex-col space-y-1">
-                  <span>booking@gfkholidays.com</span>
-                  <span>info@gfkholidays.com</span>
-                  <span>accounts@gfkholidays.com</span>
+                <div className="flex flex-col space-y-1 min-w-0 break-words">
+                  <span>booking@gfkholidays.com (Payments &amp; Bookings)</span>
+                  <span>flights@gfkholidays.com (Flight Quotes &amp; Inquiries)</span>
+                  <span>info@gfkholidays.com (General Support)</span>
                 </div>
               </li>
               <li className="flex items-start">

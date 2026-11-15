@@ -7,8 +7,14 @@ import {
   isUploadedVideoUrl,
   isUniversalHttpVideoUrl,
   ensureUploadedVideoSyncedToServer,
+  getWarmMemoryBlobUrl,
+  getWarmHttpBlobUrl,
+  getCachedPlayableVideoUrl,
+  cacheHttpVideoInBackground,
+  getHeroPosterCache,
   DEFAULT_SCENIC_HERO_VIDEO
 } from '../lib/videoStorage';
+import { HOME_SECTIONS, HOME_SECTION_EVENT, scrollToHomeSection } from '../lib/homeSections';
 import {
   Search,
   MapPin,
@@ -29,18 +35,40 @@ import {
   Copy,
   Check,
   UtensilsCrossed,
-  Volume2,
-  VolumeX,
   Compass,
   Calendar,
   Users,
   FileText,
   X,
   Info,
-  Sparkles,
-  QrCode
+  QrCode,
+  Plane,
+  Camera,
+  Play,
+  Flame,
+  ExternalLink,
+  Globe
 } from 'lucide-react';
-import { Package, Ticket as TicketType, Hotel, TransportRoute, Agent, GlobalSettings } from '../types';
+import {
+  Package,
+  Ticket as TicketType,
+  Hotel,
+  TransportRoute,
+  Agent,
+  GlobalSettings,
+  AvailableFlight,
+  CustomerMediaItem,
+  PackagePoster,
+  FlightInquiry
+} from '../types';
+import {
+  DEFAULT_AVAILABLE_FLIGHTS,
+  DEFAULT_CUSTOMER_MEDIA,
+  DEFAULT_PACKAGE_POSTERS
+} from '../data';
+import PartnerAllianceSection from './PartnerAllianceSection';
+import FlightFinderSection from './FlightFinderSection';
+import { useCurrencyRate } from '../lib/currency';
 
 interface MobileB2CHomeProps {
   packages: Package[];
@@ -53,6 +81,9 @@ interface MobileB2CHomeProps {
   imageMap: Record<string, string>;
   onNavigate: (path: string, params?: any) => void;
   onRequestLogin?: (role: 'customer' | 'agent') => void;
+  onSubmitFlightInquiry?: (
+    inquiry: Omit<FlightInquiry, 'id' | 'status' | 'createdAt' | 'targetEmail'>
+  ) => Promise<FlightInquiry | null>;
 }
 
 export default function MobileB2CHome({
@@ -65,20 +96,66 @@ export default function MobileB2CHome({
   globalSettings,
   imageMap,
   onNavigate,
-  onRequestLogin: _onRequestLogin
+  onRequestLogin: _onRequestLogin,
+  onSubmitFlightInquiry
 }: MobileB2CHomeProps) {
+  const { formatPrice } = useCurrencyRate();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeBannerIdx, setActiveBannerIdx] = useState(0);
   const [selectedLocation, setSelectedLocation] = useState('ALL');
-  const [activeTab, setActiveTab] = useState<'all' | 'packages' | 'tickets' | 'hotels'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'packages' | 'tickets' | 'hotels' | 'flights'>('all');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
-  const [videoMuted, setVideoMuted] = useState(true);
   const mobileVideoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const handleSectionFocus = (e: Event) => {
+      const detail = (e as CustomEvent<{ sectionId?: string }>).detail;
+      const id = detail?.sectionId;
+      if (id === HOME_SECTIONS.flights || id === HOME_SECTIONS.packages || id === HOME_SECTIONS.tickets || id === HOME_SECTIONS.hotels) {
+        setActiveTab(id);
+      }
+    };
+    window.addEventListener(HOME_SECTION_EVENT, handleSectionFocus);
+    return () => window.removeEventListener(HOME_SECTION_EVENT, handleSectionFocus);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('IntersectionObserver' in window)) return;
+    const sectionIds: Array<'flights' | 'packages' | 'tickets' | 'hotels'> = [
+      HOME_SECTIONS.flights,
+      HOME_SECTIONS.packages,
+      HOME_SECTIONS.tickets,
+      HOME_SECTIONS.hotels
+    ];
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible.length > 0) {
+          const id = visible[0].target.id as 'flights' | 'packages' | 'tickets' | 'hotels';
+          if (sectionIds.includes(id)) {
+            setActiveTab(id);
+          }
+        }
+      },
+      { rootMargin: '-22% 0px -58% 0px', threshold: [0.1, 0.3] }
+    );
+
+    sectionIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, []);
 
   // Quick Action Modals state (1-2 click instant checkout or details inspection)
   const [activeTicketModal, setActiveTicketModal] = useState<TicketType | null>(null);
   const [activeHotelModal, setActiveHotelModal] = useState<Hotel | null>(null);
   const [activePackageModal, setActivePackageModal] = useState<Package | null>(null);
+  const [activeReviewLightbox, setActiveReviewLightbox] = useState<CustomerMediaItem | null>(null);
 
   // Ticket modal selections
   const [ticketSelectedCategoryIdx, setTicketSelectedCategoryIdx] = useState(0);
@@ -121,8 +198,11 @@ export default function MobileB2CHome({
       (!hasExplicitSource && getVideoSourceMode() === 'upload');
 
     if (isUploadMode) {
+      const warmBlob = getWarmMemoryBlobUrl('hero_background_video', globalSettings.heroVideoFileName);
+      if (warmBlob) return warmBlob;
+
       if (isUniversalHttpVideoUrl(globalSettings.heroVideoUrl)) {
-        return globalSettings.heroVideoUrl!;
+        return getWarmHttpBlobUrl(globalSettings.heroVideoUrl) || globalSettings.heroVideoUrl!;
       }
       if (
         globalSettings.heroVideoUrl &&
@@ -137,26 +217,33 @@ export default function MobileB2CHome({
         (isUniversalHttpVideoUrl(serverUpload) ||
           (isExpressHost() && serverUpload.startsWith('/api/cms-video/')))
       ) {
-        return serverUpload;
+        return getWarmHttpBlobUrl(serverUpload) || serverUpload;
       }
-      return DEFAULT_SCENIC_HERO_VIDEO;
+      return '';
     }
 
     const rawUrl = globalSettings.heroVideoUrl || globalSettings.featuredVideoEmbedUrl;
     if (rawUrl && !rawUrl.includes('viddler.com') && !rawUrl.startsWith('firestore-video://')) {
-      return rawUrl;
+      return getWarmHttpBlobUrl(rawUrl) || rawUrl;
     }
-    return DEFAULT_SCENIC_HERO_VIDEO;
+    return getWarmHttpBlobUrl(DEFAULT_SCENIC_HERO_VIDEO) || DEFAULT_SCENIC_HERO_VIDEO;
   };
 
   const [activeFeaturedVideo, setActiveFeaturedVideo] = useState<string>(resolvePreferredMobileVideo);
+  const [mobileVideoReady, setMobileVideoReady] = useState<boolean>(false);
+  const mobilePosterUrl =
+    globalSettings.heroFallbackImage || getHeroPosterCache() || imageMap.kl;
+
+  useEffect(() => {
+    setMobileVideoReady(false);
+  }, [activeFeaturedVideo]);
 
   useEffect(() => {
     const handleVideoUpdated = (event: any) => {
       const { videoUrl, serverUrl, fileName } = event.detail || {};
       const preferredPlayable =
-        (isUniversalHttpVideoUrl(serverUrl) ? serverUrl : null) ||
         (videoUrl && !String(videoUrl).startsWith('firestore-video://') ? videoUrl : null) ||
+        (isUniversalHttpVideoUrl(serverUrl) ? getWarmHttpBlobUrl(serverUrl) || serverUrl : null) ||
         (serverUrl && isExpressHost() && String(serverUrl).startsWith('/api/cms-video/')
           ? serverUrl
           : null);
@@ -187,7 +274,7 @@ export default function MobileB2CHome({
 
   useEffect(() => {
     const el = mobileVideoRef.current;
-    if (!el) return;
+    if (!el || !activeFeaturedVideo) return;
     el.loop = true;
     const playPromise = el.play();
     if (playPromise !== undefined) {
@@ -208,7 +295,18 @@ export default function MobileB2CHome({
       ensureUploadedVideoSyncedToServer('hero_background_video', globalSettings.heroVideoFileName);
 
       if (isUniversalHttpVideoUrl(incomingUrl)) {
-        setActiveFeaturedVideo((prev) => (prev !== incomingUrl! ? incomingUrl! : prev));
+        setActiveFeaturedVideo((prev) => {
+          if (prev && prev.startsWith('blob:') && getWarmHttpBlobUrl(incomingUrl) === prev) return prev;
+          return prev !== incomingUrl! ? incomingUrl! : prev;
+        });
+        getCachedPlayableVideoUrl(incomingUrl!).then((resolved) => {
+          if (!isMounted) return;
+          if (resolved && resolved.startsWith('blob:')) {
+            setActiveFeaturedVideo((prev) => (prev !== resolved ? resolved : prev));
+          } else {
+            cacheHttpVideoInBackground(incomingUrl).catch(() => {});
+          }
+        });
         return () => {
           isMounted = false;
         };
@@ -230,15 +328,24 @@ export default function MobileB2CHome({
       };
     }
 
-    if (
-      incomingUrl &&
-      !incomingUrl.includes('viddler.com') &&
-      !incomingUrl.startsWith('firestore-video://')
-    ) {
-      setActiveFeaturedVideo((prev) => (prev !== incomingUrl ? incomingUrl : prev));
-    } else if (!incomingUrl) {
-      setActiveFeaturedVideo(DEFAULT_SCENIC_HERO_VIDEO);
-    }
+    const targetUrl =
+      incomingUrl && !incomingUrl.includes('viddler.com') && !incomingUrl.startsWith('firestore-video://')
+        ? incomingUrl
+        : DEFAULT_SCENIC_HERO_VIDEO;
+
+    setActiveFeaturedVideo((prev) => {
+      const warm = getWarmHttpBlobUrl(targetUrl);
+      const next = warm || targetUrl;
+      return prev !== next ? next : prev;
+    });
+    getCachedPlayableVideoUrl(targetUrl).then((resolved) => {
+      if (!isMounted) return;
+      if (resolved && resolved.startsWith('blob:')) {
+        setActiveFeaturedVideo((prev) => (prev !== resolved ? resolved : prev));
+      } else {
+        cacheHttpVideoInBackground(targetUrl).catch(() => {});
+      }
+    });
 
     return () => {
       isMounted = false;
@@ -402,8 +509,63 @@ export default function MobileB2CHome({
     setActivePackageModal(null);
   };
 
+  // GFK Fixed-Allotment Flight Seat Request / Booking Dispatcher (payments go to booking@gfkholidays.com)
+  const handleBookAvailableFlight = (flight: AvailableFlight) => {
+    onNavigate('/checkout', {
+      product: {
+        id: flight.id,
+        title: `${flight.airline} ${flight.flightNumber} (${flight.originCode} → ${flight.destinationCode})`,
+        name: `${flight.airline} ${flight.flightNumber}`,
+        destination: flight.destinationCity,
+        image: 'kl',
+        base_price: flight.farePerPax,
+        category: 'Flight',
+        isFlight: true
+      },
+      pax: 1,
+      date: flight.departureDate,
+      timeSlot: `${flight.departureTime} – ${flight.arrivalTime}`,
+      optionName: `${flight.cabinClass || 'Economy'} · ${flight.baggage || '20kg Baggage'}`,
+      displayPrice: flight.farePerPax,
+      total: flight.farePerPax,
+      commission: 0
+    });
+  };
+
+  const availableFlightsList: AvailableFlight[] =
+    Array.isArray(globalSettings.availableFlights) && globalSettings.availableFlights.length > 0
+      ? globalSettings.availableFlights
+      : DEFAULT_AVAILABLE_FLIGHTS;
+
+  const packagePostersList: PackagePoster[] =
+    Array.isArray(globalSettings.packagePosters) && globalSettings.packagePosters.length > 0
+      ? globalSettings.packagePosters
+      : DEFAULT_PACKAGE_POSTERS;
+
+  const customerMediaList: CustomerMediaItem[] =
+    Array.isArray(globalSettings.customerMedia) && globalSettings.customerMedia.length > 0
+      ? globalSettings.customerMedia
+      : DEFAULT_CUSTOMER_MEDIA;
+
+  const getFlightStatusClass = (status: AvailableFlight['status']) => {
+    switch (status) {
+      case 'ON TIME':
+        return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+      case 'BOARDING':
+        return 'bg-sky-50 text-sky-800 border-sky-200';
+      case 'LIMITED SEATS':
+        return 'bg-amber-50 text-amber-800 border-amber-200';
+      case 'DELAYED':
+        return 'bg-rose-50 text-rose-800 border-rose-200';
+      case 'DEPARTED':
+        return 'bg-zinc-100 text-zinc-600 border-zinc-200';
+      default:
+        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    }
+  };
+
   return (
-    <div className="flex flex-col bg-zinc-50 pb-20 text-zinc-900 font-sans">
+    <div className="flex flex-col w-full max-w-full overflow-x-clip bg-zinc-50 pb-20 text-zinc-900 font-sans">
       {/* 1. TOP ANNOUNCEMENT RIBBON - Displayed only if voucherDisplayMode is 'both' */}
       {globalSettings.voucherDisplayMode === 'both' && (
         <div className="bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-800 text-white px-3 py-1 flex items-center justify-between text-xs font-semibold shadow-xs z-20">
@@ -434,422 +596,409 @@ export default function MobileB2CHome({
       )}
 
       {/* =====================================================================
-          2. EXCLUSIVELY MALAYSIA HERO SECTION (Streamlined & Compact Spacing)
-          1. Header Identity
-          2. Featured Video Embed (Compact 16:9 with sound toggle)
-          3. 6 Core Phone-Size Services (Kept First as requested)
-          4. Search Bar & Destination Filters
+          2. FULL-BLEED BACKGROUND VIDEO HERO WITH EXPLORE TRAVEL SERVICES OVERLAY
+          (Aligned with Live Desktop Website)
       ===================================================================== */}
-      <section id="mobile-hero-section" data-aistudio-editable="true" className="relative overflow-hidden pt-2.5 pb-4 px-3 bg-gradient-to-br from-amber-50/80 via-yellow-50/40 to-emerald-50/60 border-b border-zinc-200">
-        {/* Radiant Sunlight & Glittering Shimmer Overlay */}
-        <div className="absolute inset-0 z-0 pointer-events-none select-none overflow-hidden">
-          <div className="absolute -top-10 -right-10 w-48 h-48 bg-amber-300/30 rounded-full blur-2xl animate-pulse" />
-          <div className="absolute top-1/2 left-1/4 w-32 h-32 bg-yellow-200/40 rounded-full blur-xl" />
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-amber-200/20 via-transparent to-transparent opacity-70" />
-        </div>
-
-        {/* Scenic Background Texture */}
-        <div className="absolute inset-0 z-0 pointer-events-none select-none opacity-10">
-          <img
-            src="https://images.unsplash.com/photo-1596422846543-75c6fc1f4767?auto=format&fit=crop&w=1200&q=80"
-            alt="Malaysia Scenery"
-            className="w-full h-full object-cover filter blur-[1px]"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-white/90 via-white/70 to-white/90" />
-        </div>
-
-        {/* HERO TITLE - Compact */}
-        <div className="relative z-10 pt-0.5 pb-1.5 flex items-center justify-between">
-          <div>
-            <h1 className="text-zinc-950 text-lg font-black tracking-tight leading-tight flex items-center gap-1.5">
-              <span>Truly Asia Experiences &amp; Stays</span>
-              <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400 animate-spin-slow shrink-0" />
-            </h1>
-            <p className="text-zinc-600 text-[11px] font-medium mt-0.5">
-              Direct local booking for tour packages, 5-star hotels &amp; gate QR passes
-            </p>
-          </div>
-        </div>
-
-        {/* FEATURED VIDEO - Sleek 16:9 Clean Video Screen */}
-        <div className="relative z-10 mt-1.5 w-full rounded-2xl overflow-hidden shadow-md border border-zinc-200 bg-black">
-          <div className="relative w-full" style={{ aspectRatio: '16/9' }}>
-            {(() => {
-              const src =
-                activeFeaturedVideo ||
-                (globalSettings.heroVideoUrl && !globalSettings.heroVideoUrl.includes('viddler.com')
-                  ? globalSettings.heroVideoUrl
-                  : 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4');
-              const isDirectVideo = isDirectVideoSource(src);
-              if (isDirectVideo) {
-                return (
-                  <video
-                    ref={mobileVideoRef}
-                    key={src}
-                    src={src}
-                    autoPlay
-                    loop
-                    muted={videoMuted}
-                    playsInline
-                    preload="auto"
-                    controls={false}
-                    disablePictureInPicture
-                    disableRemotePlayback
-                    tabIndex={-1}
-                    aria-hidden="true"
-                    onContextMenu={(e) => e.preventDefault()}
-                    onKeyDown={(e) => e.preventDefault()}
-                    onEnded={(e) => {
-                      const v = e.currentTarget;
-                      v.currentTime = 0;
-                      v.play().catch(() => {});
-                    }}
-                    onPause={(e) => {
-                      const v = e.currentTarget;
-                      if (!document.hidden && !v.ended) {
-                        v.play().catch(() => {});
-                      }
-                    }}
-                    onError={() => {
-                      loadVideoBlob(
-                        'hero_background_video',
-                        globalSettings.heroVideoFileName,
-                        globalSettings.heroVideoUrl
-                      ).then((blobUrl) => {
-                        if (blobUrl && blobUrl !== src && !blobUrl.startsWith('firestore-video://')) {
-                          setActiveFeaturedVideo(blobUrl);
-                        } else if (src !== DEFAULT_SCENIC_HERO_VIDEO) {
-                          setActiveFeaturedVideo(DEFAULT_SCENIC_HERO_VIDEO);
-                        }
-                      });
-                    }}
-                    className="absolute inset-0 w-full h-full object-cover pointer-events-none select-none"
-                  />
-                );
-              }
+      <section
+        id="mobile-hero-section"
+        data-aistudio-editable="true"
+        className="relative w-full overflow-hidden bg-zinc-950 text-white"
+      >
+        {/* Full-Bleed Looping Video Backdrop + 0ms Poster Frame */}
+        <div
+          className="absolute inset-0 overflow-hidden bg-zinc-950 pointer-events-none select-none"
+          style={{ userSelect: 'none' }}
+        >
+          {mobilePosterUrl && (
+            <img
+              src={mobilePosterUrl}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover scale-105 pointer-events-none select-none"
+            />
+          )}
+          {(() => {
+            const src = activeFeaturedVideo;
+            if (!src) return null;
+            const isDirectVideo = isDirectVideoSource(src);
+            if (isDirectVideo) {
               return (
-                <iframe
+                <video
+                  ref={mobileVideoRef}
                   key={src}
                   src={src}
-                  className="absolute inset-0 w-full h-full border-0 block"
-                  allow="autoplay; fullscreen"
-                  allowFullScreen
-                  title="Featured Malaysia Experience Video"
+                  poster={mobilePosterUrl}
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="auto"
+                  controls={false}
+                  disablePictureInPicture
+                  disableRemotePlayback
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  onContextMenu={(e) => e.preventDefault()}
+                  onKeyDown={(e) => e.preventDefault()}
+                  onLoadedData={() => setMobileVideoReady(true)}
+                  onCanPlay={() => setMobileVideoReady(true)}
+                  onEnded={(e) => {
+                    const v = e.currentTarget;
+                    v.currentTime = 0;
+                    v.play().catch(() => {});
+                  }}
+                  onPause={(e) => {
+                    const v = e.currentTarget;
+                    if (!document.hidden && !v.ended) {
+                      v.play().catch(() => {});
+                    }
+                  }}
+                  onError={() => {
+                    loadVideoBlob(
+                      'hero_background_video',
+                      globalSettings.heroVideoFileName,
+                      globalSettings.heroVideoUrl
+                    ).then((blobUrl) => {
+                      if (blobUrl && blobUrl !== src && !blobUrl.startsWith('firestore-video://')) {
+                        setActiveFeaturedVideo(blobUrl);
+                      } else if (src !== DEFAULT_SCENIC_HERO_VIDEO) {
+                        setActiveFeaturedVideo(DEFAULT_SCENIC_HERO_VIDEO);
+                      }
+                    });
+                  }}
+                  className={`absolute inset-0 w-full h-full object-cover scale-105 brightness-105 pointer-events-none select-none transition-opacity duration-300 ${
+                    mobileVideoReady ? 'opacity-100' : 'opacity-0'
+                  }`}
                 />
               );
-            })()}
-          </div>
-          {/* Floating Audio Toggle Overlay */}
-          <button
-            type="button"
-            onClick={() => {
-              setVideoMuted(!videoMuted);
-              if (mobileVideoRef.current) mobileVideoRef.current.muted = !videoMuted;
+            }
+            return (
+              <iframe
+                key={src}
+                src={src}
+                className="w-full h-full object-cover scale-105 pointer-events-none border-0"
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                title="Featured Malaysia Experience Video"
+              />
+            );
+          })()}
+
+          {/* Subtle Admin Backdrop Tint & Light Contrast Scrim (preserves video brightness on mobile) */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backgroundColor: globalSettings.heroBgColor || '#091e1a',
+              opacity: Math.max(0.08, Math.min(0.3, ((globalSettings.heroOverlayOpacity ?? 60) / 100) * 0.38))
             }}
-            className="absolute bottom-3 right-3 z-20 bg-black/75 hover:bg-black text-white px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 backdrop-blur-sm transition-colors cursor-pointer shadow-md"
-          >
-            {videoMuted ? <VolumeX className="w-3.5 h-3.5 text-zinc-300" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
-            <span>{videoMuted ? 'Unmute' : 'Muted'}</span>
-          </button>
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/35 via-zinc-950/10 to-zinc-950/45 pointer-events-none" />
         </div>
 
-        {/* =====================================================================
-            3. THE 6 CORE SERVICES (DISPLAYED FIRST AS MANDATED)
-            Compact, responsive 2-column grid with clear instant action
-        ===================================================================== */}
-                <div id="mobile-services-grid" data-aistudio-editable="true" className="relative z-10 mt-3.5">
-          <div className="mb-2 px-0.5">
-            <div className="flex items-center gap-1.5 text-xs font-black text-zinc-950 uppercase tracking-wide">
-              <Sparkles className="w-4 h-4 text-emerald-600" />
-              <span>What would you like to book today?</span>
-            </div>
-            <p className="text-[10px] text-zinc-500 font-medium mt-0.5">
-              Tap any category below to instantly browse live availability &amp; direct contract rates
+        {/* Foreground Content Over Background Video */}
+        <div className="relative z-20 px-3.5 pt-4 pb-5 space-y-3.5">
+          <div>
+            <p className="text-[10px] font-bold text-emerald-300 tracking-wide uppercase drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
+              {globalSettings.heroBadgeText || 'Licensed Malaysia Destination Operator'}
             </p>
+            <h1 className="text-white text-xl font-extrabold tracking-tight leading-[1.15] mt-1 drop-shadow-[0_2px_8px_rgba(0,0,0,0.75)]">
+              <span className="font-serif italic font-semibold text-amber-300 block">
+                {globalSettings.heroTitleLine1 || 'Experience Truly Asia:'}
+              </span>
+              {globalSettings.heroTitleLine2 || "Malaysia's Finest Tours, Activities & Stays."}
+            </h1>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5">
-            {/* SERVICE 1: Holiday Tour Packages */}
-            <button
-              type="button"
-              onClick={() => onNavigate('/search', { category: 'Packages' })}
-              className="group relative bg-white hover:bg-emerald-50/40 border border-zinc-200 hover:border-amber-500 rounded-2xl p-3 text-left shadow-xs transition-all cursor-pointer flex flex-col justify-between h-[116px]"
+          {/* Search Input (Excludes Flight Fares — packages, hotels & attractions only) */}
+          <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-2">
+            <form
+              onSubmit={handleSearchSubmit}
+              className="bg-white rounded-xl p-1 shadow-lg border border-white/30 flex items-center gap-1.5"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-xs">
+              <div className="flex-1 flex items-center gap-2 px-2.5 py-1">
+                <Search className="w-4 h-4 text-emerald-700 shrink-0" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tours, hotels, attraction tickets in Malaysia..."
+                  className="w-full text-xs font-semibold text-zinc-900 bg-transparent focus:outline-none placeholder-zinc-400"
+                />
+              </div>
+              <button
+                type="submit"
+                className="bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-2 rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer"
+              >
+                Explore
+              </button>
+            </form>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 no-scrollbar">
+              {quickLocations.map((loc) => (
+                <button
+                  key={loc.id}
+                  type="button"
+                  onClick={() => setSelectedLocation(loc.id)}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap border ${
+                    selectedLocation === loc.id
+                      ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
+                      : 'bg-zinc-950/45 text-white border-white/25 hover:bg-zinc-900/60 backdrop-blur-md'
+                  }`}
+                >
+                  {loc.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO */}
+          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-1">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-[11px] font-extrabold uppercase tracking-wider text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                Explore Travel Services
+              </h2>
+              <span className="text-[10px] font-bold text-amber-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                Direct Operator Rates
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onNavigate('/search', { category: 'Packages' })}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-amber-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0">
                   <Palmtree className="w-4 h-4 stroke-[2.2]" />
                 </div>
-                <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[8px] font-black px-1.5 py-0.5 rounded-full">
-                  Guided Tours
-                </span>
-              </div>
-              <div>
-                <h3 className="text-xs font-black text-zinc-950 group-hover:text-amber-700 transition-colors leading-tight">
-                  Holiday Packages
-                </h3>
-                <p className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                  Langkawi, Sabah &amp; KL Itineraries
-                </p>
-              </div>
-              <div className="text-[9px] font-bold text-amber-600 flex items-center gap-0.5 mt-1">
-                <span>Browse Tours</span>
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </button>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Holiday Packages
+                  </h3>
+                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                    Guided tours &amp; stays
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
+              </button>
 
-            {/* SERVICE 2: Hotels & Stays */}
-            <button
-              type="button"
-              onClick={() => onNavigate('/hotels')}
-              className="group relative bg-white hover:bg-emerald-50/40 border border-zinc-200 hover:border-emerald-500 rounded-2xl p-3 text-left shadow-xs transition-all cursor-pointer flex flex-col justify-between h-[116px]"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shadow-xs">
+              <button
+                type="button"
+                onClick={() => onNavigate('/hotels')}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-emerald-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
                   <Building2 className="w-4 h-4 stroke-[2.2]" />
                 </div>
-                <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[8px] font-black px-1.5 py-0.5 rounded-full">
-                  Overnight Stays
-                </span>
-              </div>
-              <div>
-                <h3 className="text-xs font-black text-zinc-950 group-hover:text-emerald-700 transition-colors leading-tight">
-                  Hotels &amp; Resorts
-                </h3>
-                <p className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                  5-Star Rooms &amp; Beach Villas
-                </p>
-              </div>
-              <div className="text-[9px] font-bold text-emerald-600 flex items-center gap-0.5 mt-1">
-                <span>View Stays</span>
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </button>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Hotels &amp; Resorts
+                  </h3>
+                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                    Contracted room rates
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
+              </button>
 
-            {/* SERVICE 3: Sightseeing & E-Tickets */}
-            <button
-              type="button"
-              onClick={() => onNavigate('/tickets')}
-              className="group relative bg-white hover:bg-emerald-50/40 border border-zinc-200 hover:border-purple-500 rounded-2xl p-3 text-left shadow-xs transition-all cursor-pointer flex flex-col justify-between h-[116px]"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-xs">
+              <button
+                type="button"
+                onClick={() => onNavigate('/tickets')}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-purple-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
                   <Ticket className="w-4 h-4 stroke-[2.2]" />
                 </div>
-                <span className="bg-purple-100 text-purple-900 border border-purple-300 text-[8px] font-black px-1.5 py-0.5 rounded-full">
-                  Gate QR Code
-                </span>
-              </div>
-              <div>
-                <h3 className="text-xs font-black text-zinc-950 group-hover:text-purple-700 transition-colors leading-tight">
-                  Attraction E-Tickets
-                </h3>
-                <p className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                  Twin Towers &amp; Theme Parks
-                </p>
-              </div>
-              <div className="text-[9px] font-bold text-purple-600 flex items-center gap-0.5 mt-1">
-                <span>Get Passes</span>
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </button>
-
-            {/* SERVICE 4: Restaurants & Dining */}
-            <button
-              type="button"
-              onClick={() => onNavigate('/restaurants')}
-              className="group relative bg-white hover:bg-emerald-50/40 border border-zinc-200 hover:border-rose-500 rounded-2xl p-3 text-left shadow-xs transition-all cursor-pointer flex flex-col justify-between h-[116px]"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shadow-xs">
-                  <UtensilsCrossed className="w-4 h-4 stroke-[2.2]" />
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Attraction Tickets
+                  </h3>
+                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                    Instant gate QR passes
+                  </p>
                 </div>
-                <span className="bg-rose-100 text-rose-900 border border-rose-300 text-[8px] font-black px-1.5 py-0.5 rounded-full">
-                  Culinary Dining
-                </span>
-              </div>
-              <div>
-                <h3 className="text-xs font-black text-zinc-950 group-hover:text-rose-700 transition-colors leading-tight">
-                  Restaurants &amp; Food
-                </h3>
-                <p className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                  Michelin Trails &amp; High-Tea
-                </p>
-              </div>
-              <div className="text-[9px] font-bold text-rose-600 flex items-center gap-0.5 mt-1">
-                <span>Explore Dining</span>
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </button>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
+              </button>
 
-            {/* SERVICE 5: Transport & Transfers */}
-            <button
-              type="button"
-              onClick={() => onNavigate('/transport')}
-              className="group relative bg-white hover:bg-emerald-50/40 border border-zinc-200 hover:border-blue-500 rounded-2xl p-3 text-left shadow-xs transition-all cursor-pointer flex flex-col justify-between h-[116px]"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center shadow-xs">
+              <button
+                type="button"
+                onClick={() => onNavigate('/flights')}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-sky-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0">
+                  <Plane className="w-4 h-4 stroke-[2.2]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Flights
+                  </h3>
+                  <p className="text-[10px] text-sky-200 truncate mt-0.5">
+                    GFK available &amp; status
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigate('/transport')}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-blue-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
                   <Car className="w-4 h-4 stroke-[2.2]" />
                 </div>
-                <span className="bg-blue-100 text-blue-900 border border-blue-300 text-[8px] font-black px-1.5 py-0.5 rounded-full">
-                  Airport &amp; Cabs
-                </span>
-              </div>
-              <div>
-                <h3 className="text-xs font-black text-zinc-950 group-hover:text-blue-700 transition-colors leading-tight">
-                  Transport Services
-                </h3>
-                <p className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                  KLIA Cabs &amp; VIP Chauffeurs
-                </p>
-              </div>
-              <div className="text-[9px] font-bold text-blue-600 flex items-center gap-0.5 mt-1">
-                <span>Book Transfer</span>
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </button>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Private Transfers
+                  </h3>
+                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                    KLIA cabs &amp; chauffeurs
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
+              </button>
 
-            {/* SERVICE 6: Island Cruises */}
-            <button
-              type="button"
-              onClick={() => onNavigate('/cruises')}
-              className="group relative bg-white hover:bg-emerald-50/40 border border-zinc-200 hover:border-teal-500 rounded-2xl p-3 text-left shadow-xs transition-all cursor-pointer flex flex-col justify-between h-[116px]"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white flex items-center justify-center shadow-xs">
+              <button
+                type="button"
+                onClick={() => onNavigate('/restaurants')}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-rose-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2.5 min-h-[56px]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                  <UtensilsCrossed className="w-4 h-4 stroke-[2.2]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Dining &amp; Cruises
+                  </h3>
+                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                    Food trails &amp; yachts
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('/cruises')}
+                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-teal-400/70 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[56px] min-w-0"
+              >
+                <div className="w-8 h-8 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0">
                   <Waves className="w-4 h-4 stroke-[2.2]" />
                 </div>
-                <span className="bg-cyan-100 text-cyan-900 border border-cyan-300 text-[8px] font-black px-1.5 py-0.5 rounded-full">
-                  Sea &amp; Yacht
-                </span>
-              </div>
-              <div>
-                <h3 className="text-xs font-black text-zinc-950 group-hover:text-teal-700 transition-colors leading-tight">
-                  Island Cruises
-                </h3>
-                <p className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                  Sunset Catamaran &amp; Ferries
-                </p>
-              </div>
-              <div className="text-[9px] font-bold text-teal-600 flex items-center gap-0.5 mt-1">
-                <span>View Cruises</span>
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </button>
-          </div>
-        </div>
-
-        {/* 4. SEARCH BAR & QUICK DESTINATION CHIPS */}
-        <div id="mobile-search-section" data-aistudio-editable="true" className="relative z-10 mt-3">
-          <form
-            onSubmit={handleSearchSubmit}
-            className="bg-white rounded-xl p-1 border border-zinc-300/80 shadow-md flex items-center gap-1.5"
-          >
-            <div className="flex-1 flex items-center gap-1.5 px-2 py-0.5">
-              <Search className="w-4 h-4 text-emerald-700 shrink-0" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search Malaysia attractions, hotels & tours..."
-                className="w-full text-xs font-bold text-zinc-900 bg-transparent focus:outline-none placeholder-zinc-400"
-              />
-            </div>
-            <button
-              type="submit"
-              className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1.5 rounded-lg text-xs font-black shrink-0 transition-colors cursor-pointer shadow-xs"
-            >
-              Search
-            </button>
-          </form>
-
-          {/* Quick Destination Filter Chips */}
-          <div className="flex items-center gap-1 overflow-x-auto pt-2 pb-0.5 no-scrollbar scroll-smooth">
-            {quickLocations.map((loc) => (
-              <button
-                key={loc.id}
-                type="button"
-                onClick={() => setSelectedLocation(loc.id)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 transition-all cursor-pointer whitespace-nowrap ${
-                  selectedLocation === loc.id
-                    ? 'bg-emerald-500 text-white shadow-xs'
-                    : 'bg-zinc-900/90 text-zinc-300 border border-zinc-700/80 hover:border-zinc-500'
-                }`}
-              >
-                {loc.label}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                    Cruises &amp; Yachts
+                  </h3>
+                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                    Langkawi sunset sails
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
-            ))}
+
+              <button
+                type="button"
+                onClick={() => onNavigate('/marketplaces')}
+                className="bg-emerald-950/75 hover:bg-emerald-900/85 backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-2xl p-2.5 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[56px] min-w-0"
+              >
+                <div className="w-8 h-8 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0">
+                  <Globe className="w-4 h-4 stroke-[2.2]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1">
+                    <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                      Marketplaces
+                    </h3>
+                    <span className="px-1 py-0.5 rounded bg-amber-400 text-zinc-950 text-[8px] font-black uppercase leading-none shrink-0">
+                      Hot
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-emerald-200 truncate mt-0.5">
+                    Viator · GYG · TripAdvisor
+                  </p>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+              </button>
+            </div>
           </div>
         </div>
       </section>
 
       {/* =====================================================================
-          4. 1-CLICK QUICK CATEGORY FILTER TAB SWITCHER
-          Allows user to instantly jump or filter Holidays, Tickets, Hotels in 1 click
+          4. QUICK CATEGORY JUMP BAR (AUTO-SCROLLS TO SELECTED SECTION)
       ===================================================================== */}
-      <div className="sticky top-16 z-20 bg-white/95 backdrop-blur-md border-b border-zinc-200 px-3 py-2.5 flex items-center gap-2 overflow-x-auto no-scrollbar shadow-xs">
-        <button
-          type="button"
-          onClick={() => setActiveTab('all')}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-            activeTab === 'all'
-              ? 'bg-zinc-950 text-white shadow-sm'
-              : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 border border-zinc-200'
-          }`}
-        >
-          ⭐ All Deals
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('packages')}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-            activeTab === 'packages'
-              ? 'bg-amber-500 text-white shadow-sm'
-              : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 border border-zinc-200'
-          }`}
-        >
-          🌴 Holidays &amp; Packages
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('tickets')}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-            activeTab === 'tickets'
-              ? 'bg-purple-600 text-white shadow-sm'
-              : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 border border-zinc-200'
-          }`}
-        >
-          🎟️ Attraction Tickets
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('hotels')}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-            activeTab === 'hotels'
-              ? 'bg-emerald-600 text-white shadow-sm'
-              : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 border border-zinc-200'
-          }`}
-        >
-          🏨 Hotels &amp; Stays
-        </button>
+      <div className="bg-zinc-50 border-b border-zinc-200 px-3.5 py-2.5">
+        <div className="grid grid-cols-5 gap-1 bg-zinc-200/75 p-1 rounded-xl">
+          {[
+            { id: 'all', label: 'All', targetId: HOME_SECTIONS.flights },
+            { id: 'flights', label: 'Flights', targetId: HOME_SECTIONS.flights },
+            { id: 'packages', label: 'Packages', targetId: HOME_SECTIONS.packages },
+            { id: 'tickets', label: 'Tickets', targetId: HOME_SECTIONS.tickets },
+            { id: 'hotels', label: 'Hotels', targetId: HOME_SECTIONS.hotels }
+          ].map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setActiveTab(t.id as any);
+                requestAnimationFrame(() => {
+                  scrollToHomeSection(t.targetId, t.id === 'flights');
+                });
+              }}
+              className={`py-2 px-1 rounded-lg text-[10.5px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                activeTab === t.id ? 'bg-white text-zinc-950 shadow-xs' : 'text-zinc-600'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* 5. FESTIVAL PROMO BANNER CAROUSEL - Only if voucherDisplayMode is 'both' */}
-      {globalSettings.voucherDisplayMode === 'both' && (
-        <section className="px-3 pt-2 pb-1 bg-zinc-50">
-          <div className="relative rounded-2xl overflow-hidden shadow-md">
+      {/* =====================================================================
+          UPPER VIEW: FLIGHTS SEARCH FIRST + FARE QUOTE REQUEST
+      ===================================================================== */}
+      <FlightFinderSection
+        sectionId={HOME_SECTIONS.flights}
+        flights={availableFlightsList}
+        variant="mobile-upper"
+        flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
+        bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
+        onReserveFlight={handleBookAvailableFlight}
+        onNavigate={onNavigate}
+        onSubmitInquiry={onSubmitFlightInquiry}
+      />
+
+      {/* 5. GENEROUS SCROLL BREATHING BAND & OPTIONAL PROMO BANNER */}
+      <section className="px-3.5 py-6 bg-zinc-50 border-b border-zinc-200 space-y-4">
+        <div className="bg-white border border-zinc-200/90 rounded-2xl px-3.5 py-3 text-[11px] font-bold text-zinc-700 flex items-center justify-between shadow-2xs">
+          <span className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+            <span>30s Gate QR</span>
+          </span>
+          <span className="text-zinc-300">·</span>
+          <span className="flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+            <span>Direct Allotments</span>
+          </span>
+          <span className="text-zinc-300">·</span>
+          <span className="flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+            <span>Licensed DMC</span>
+          </span>
+        </div>
+
+        {globalSettings.voucherDisplayMode === 'both' && (
+          <div className="relative rounded-2xl overflow-hidden shadow-sm">
             {banners.map((b, idx) => {
               if (idx !== activeBannerIdx) return null;
               return (
                 <div
                   key={b.id}
-                  className={`bg-gradient-to-br ${b.bgGradient} p-3.5 text-white relative transition-all duration-300`}
+                  className={`bg-gradient-to-br ${b.bgGradient} p-4 text-white relative transition-all duration-300`}
                 >
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="bg-black/30 backdrop-blur-sm text-white text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border border-white/20">
-                      {b.badge}
-                    </span>
-                    <span className="text-[9px] font-bold text-white/90">
+                  <div className="flex items-center justify-between mb-1 text-[10px] font-bold text-white/90">
+                    <span>{b.badge}</span>
+                    <span className="tabular-nums">
                       {idx + 1} / {banners.length}
                     </span>
                   </div>
@@ -861,16 +1010,24 @@ export default function MobileB2CHome({
                     {b.subtitle}
                   </p>
 
-                  {/* Promo Code & Action Button */}
                   <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-white/20">
                     <div className="flex items-center gap-1 text-[10px] font-bold text-amber-200">
                       <Tag className="w-3 h-3" />
-                      <span>Code: <button type="button" onClick={() => handleCopyCode(b.promoCode)} className="font-mono underline text-white cursor-pointer">{b.promoCode}</button></span>
+                      <span>
+                        Code:{' '}
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCode(b.promoCode)}
+                          className="font-mono underline text-white cursor-pointer"
+                        >
+                          {b.promoCode}
+                        </button>
+                      </span>
                     </div>
                     <button
                       type="button"
                       onClick={() => onNavigate(b.actionPath)}
-                      className="bg-white text-zinc-950 font-extrabold text-[11px] px-3 py-1 rounded-lg shadow-xs flex items-center gap-1 cursor-pointer"
+                      className="bg-white text-zinc-950 font-extrabold text-[11px] px-3 py-1.5 rounded-lg shadow-xs flex items-center gap-1 cursor-pointer"
                     >
                       <span>{b.actionLabel}</span>
                       <ArrowRight className="w-3 h-3" />
@@ -880,65 +1037,43 @@ export default function MobileB2CHome({
               );
             })}
           </div>
-        </section>
-      )}
-
-      {/* 6. TRUST TICKER */}
-      <section className="px-3 py-2 bg-white border-b border-zinc-200">
-        <div className="bg-zinc-50 text-zinc-800 border border-zinc-200 rounded-xl px-3 py-2 text-[9.5px] font-semibold flex items-center justify-between shadow-xs">
-          <div className="flex items-center gap-1">
-            <Clock className="w-3 h-3 text-amber-500 shrink-0" />
-            <span>Instant Gate QR in 30s</span>
-          </div>
-          <span className="text-zinc-300">|</span>
-          <div className="flex items-center gap-1">
-            <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
-            <span>Guaranteed Hotel Allotment</span>
-          </div>
-          <span className="text-zinc-300">|</span>
-          <div className="flex items-center gap-1">
-            <Shield className="w-3 h-3 text-cyan-600 shrink-0" />
-            <span>Licensed DMC</span>
-          </div>
-        </div>
+        )}
       </section>
 
       {/* =====================================================================
           SECTION A: HOLIDAYS & TOUR PACKAGES
-          High density cards + 1-Click Quick Modal (Itinerary, T&Cs, Dates)
       ===================================================================== */}
-      {(activeTab === 'all' || activeTab === 'packages') && (
-        <section id="section-packages" data-aistudio-editable="true" className="pt-3 pb-3 bg-white border-b border-zinc-200">
-          <div className="px-3 mb-2.5">
-            <div className="bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-transparent border-l-4 border-amber-500 p-3 rounded-r-2xl shadow-2xs flex items-center justify-between">
-              <div>
-                <span className="bg-amber-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider mb-1 inline-block shadow-2xs">
-                  Featured Category
-                </span>
-                <h2 className="text-sm sm:text-base font-black text-zinc-950 flex items-center gap-1.5 tracking-tight">
-                  <span>🌴 Holidays &amp; Tour Packages</span>
-                </h2>
-                <p className="text-[10px] text-zinc-600 mt-0.5 font-medium">Direct packages with full day-by-day itineraries &amp; transfers</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onNavigate('/search', { category: 'Packages' })}
-                className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-black px-3.5 py-1.5 rounded-xl shadow-xs flex items-center gap-1 cursor-pointer shrink-0 transition-colors"
-              >
-                <span>View All</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+      <section id={HOME_SECTIONS.packages} data-aistudio-editable="true" className="scroll-mt-16 pt-8 pb-8 bg-white border-b border-zinc-200">
+        <div className="px-3.5 mb-5 pb-3.5 border-b border-zinc-200 flex items-end justify-between gap-2">
+          <div className="border-l-4 border-amber-500 pl-3 min-w-0">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-amber-700">
+              Holiday Packages
+            </p>
+            <h2 className="text-xl font-black text-zinc-950 tracking-tight leading-tight mt-0.5">
+              Holiday Tour Packages
+            </h2>
+            <p className="text-[11px] font-medium text-zinc-500 mt-0.5 truncate">
+              Guided itineraries &amp; transfers included
+            </p>
+          </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/search', { category: 'Packages' })}
+              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-0.5 cursor-pointer shrink-0 py-1"
+            >
+              <span>View All</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
 
-          <div className="flex gap-2.5 overflow-x-auto px-3 pb-2 no-scrollbar scroll-smooth">
+          <div className="flex gap-3 overflow-x-auto overscroll-x-contain snap-x snap-mandatory px-3.5 pb-1 no-scrollbar">
             {filteredPackages.map((pkg) => (
               <div
                 key={pkg.id}
-                className="w-[230px] shrink-0 bg-white border border-zinc-200 hover:border-amber-500 rounded-2xl overflow-hidden shadow-xs flex flex-col justify-between"
+                className="w-[242px] shrink-0 snap-start bg-zinc-50/70 hover:bg-white border border-zinc-200 hover:border-emerald-600 rounded-2xl overflow-hidden flex flex-col justify-between transition-colors shadow-2xs"
               >
                 <div
-                  className="relative h-28 bg-zinc-100 cursor-pointer"
+                  className="relative h-32 bg-zinc-100 cursor-pointer"
                   onClick={() => setActivePackageModal(pkg)}
                 >
                   <img
@@ -947,111 +1082,99 @@ export default function MobileB2CHome({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-xs text-zinc-900 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-xs flex items-center gap-1">
-                    <Star className="w-2.5 h-2.5 text-amber-500 fill-amber-500" />
-                    <span>{pkg.rating || 4.9}</span>
-                  </div>
-                  <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs">
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent" />
+                  {pkg.trending && (
+                    <div className="absolute top-2 left-2 bg-amber-400 text-zinc-950 text-[9.5px] font-extrabold px-2 py-0.5 rounded-md inline-flex items-center gap-0.5">
+                      <Flame className="w-2.5 h-2.5 shrink-0" />
+                      Trending
+                    </div>
+                  )}
+                  <div className="absolute top-2 right-2 bg-zinc-950/85 text-white text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums">
                     {pkg.duration_days}D/{pkg.duration_days - 1}N
                   </div>
-                  <div className="absolute bottom-1.5 left-2 bg-black/75 text-white text-[8px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
-                    <MapPin className="w-2.5 h-2.5 text-emerald-400" />
-                    <span className="truncate max-w-[120px]">{pkg.destination}</span>
+                  <div className="absolute bottom-2 left-2.5 right-2.5 flex items-center justify-between text-[10px] text-white font-semibold">
+                    <span className="flex items-center gap-1 truncate">
+                      <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                      <span className="truncate">{pkg.destination}</span>
+                    </span>
+                    <span className="flex items-center gap-0.5 text-amber-300 shrink-0 ml-1 tabular-nums">
+                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                      {pkg.rating || 4.9}
+                    </span>
                   </div>
                 </div>
 
-                <div className="p-2.5 flex-1 flex flex-col justify-between">
+                <div className="p-3 bg-white flex-1 flex flex-col justify-between">
                   <div>
+                    <span className="text-[9.5px] font-bold uppercase tracking-wider text-amber-700 block mb-0.5">
+                      Tour Package · {pkg.duration_days} Days
+                    </span>
                     <h4
                       onClick={() => setActivePackageModal(pkg)}
-                      className="text-xs font-black text-zinc-900 leading-snug line-clamp-2 hover:text-emerald-700 cursor-pointer"
+                      className="text-xs font-bold text-zinc-900 leading-snug line-clamp-2 hover:text-emerald-700 cursor-pointer"
                     >
                       {pkg.title}
                     </h4>
-
-                    {/* Features Tag */}
-                    <div className="flex items-center gap-1 mt-1 text-[9px] text-zinc-500">
-                      <span className="bg-zinc-100 px-1.5 py-0.5 rounded text-[8.5px] text-zinc-700">
-                        {pkg.itinerary?.length || pkg.duration_days} Days Itinerary
-                      </span>
-                      <span className="bg-emerald-50 px-1.5 py-0.5 rounded text-[8.5px] text-emerald-800 font-semibold">
-                        T&amp;Cs Available
-                      </span>
-                    </div>
                   </div>
 
-                  <div className="pt-2 mt-2 border-t border-zinc-100 flex items-center justify-between">
-                    <div>
-                      <span className="text-[9px] text-zinc-400 block line-through">
-                        RM {pkg.original_price || Math.round(pkg.base_price * 1.25)}
+                  <div className="pt-2.5 mt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2">
+                    <div className="tabular-nums">
+                      <span className="text-[10px] text-zinc-400 block line-through leading-none">
+                        {formatPrice(Number(pkg.original_price) || Math.round((Number(pkg.base_price) || 0) * 1.25))}
                       </span>
-                      <div className="text-xs font-black text-zinc-950">
-                        RM {pkg.base_price}
-                        <span className="text-[8.5px] font-normal text-zinc-500"> /pax</span>
+                      <div className="text-sm font-extrabold text-zinc-950 leading-tight mt-0.5">
+                        {formatPrice(Number(pkg.base_price) || 0)}
+                        <span className="text-[10px] font-normal text-zinc-500"> /pax</span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setActivePackageModal(pkg)}
-                        className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
-                      >
-                        Options
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActivePackageModal(pkg);
-                        }}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer shadow-xs"
-                      >
-                        Book
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActivePackageModal(pkg)}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer shrink-0"
+                    >
+                      Select
+                    </button>
                   </div>
                 </div>
               </div>
             ))}
           </div>
         </section>
-      )}
 
       {/* =====================================================================
           SECTION B: ATTRACTION TICKETS & PASSES
-          High-density grid + 1-Click Quick Modal (Variants, Slots, T&Cs, QR rules)
       ===================================================================== */}
-      {(activeTab === 'all' || activeTab === 'tickets') && (
-        <section id="section-tickets" data-aistudio-editable="true" className="px-3 pt-3 pb-3 bg-white border-b border-zinc-200">
-          <div className="px-3 mb-2.5">
-            <div className="bg-gradient-to-r from-purple-500/15 via-indigo-500/10 to-transparent border-l-4 border-purple-600 p-3 rounded-r-2xl shadow-2xs flex items-center justify-between">
-              <div>
-                <span className="bg-purple-600 text-white text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider mb-1 inline-block shadow-2xs">
-                  Instant QR Passes
-                </span>
-                <h2 className="text-sm sm:text-base font-black text-zinc-950 flex items-center gap-1.5 tracking-tight">
-                  <span>🎟️ Attraction Tickets &amp; E-Passes</span>
-                </h2>
-                <p className="text-[10px] text-zinc-600 mt-0.5 font-medium">Direct barcode turnaround with MyKad / Intl options &amp; T&amp;Cs</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onNavigate('/tickets')}
-                className="bg-purple-600 hover:bg-purple-500 text-white text-xs font-black px-3.5 py-1.5 rounded-xl shadow-xs flex items-center gap-1 cursor-pointer shrink-0 transition-colors"
-              >
-                <span>All Passes</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+      <section id={HOME_SECTIONS.tickets} data-aistudio-editable="true" className="scroll-mt-16 px-3.5 pt-8 pb-8 bg-zinc-50 border-b border-zinc-200">
+        <div className="mb-5 pb-3.5 border-b border-zinc-200 flex items-end justify-between gap-2">
+          <div className="border-l-4 border-purple-600 pl-3 min-w-0">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-purple-700">
+              Attraction Passes
+            </p>
+            <h2 className="text-xl font-black text-zinc-950 tracking-tight leading-tight mt-0.5">
+              Attraction E-Tickets
+            </h2>
+            <p className="text-[11px] font-medium text-zinc-500 mt-0.5 truncate">
+              Instant turnstile QR entry across Malaysia
+            </p>
+          </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/tickets')}
+              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-0.5 cursor-pointer shrink-0 py-1"
+            >
+              <span>All Passes</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2.5">
             {filteredTickets.slice(0, 6).map((ticket) => (
               <div
                 key={ticket.id}
-                className="bg-white border border-zinc-200 hover:border-purple-400 rounded-2xl p-2 shadow-xs flex flex-col justify-between"
+                className="bg-white border border-zinc-200 hover:border-purple-500 rounded-2xl overflow-hidden flex flex-col justify-between transition-colors shadow-2xs"
               >
                 <div
-                  className="relative h-24 rounded-xl overflow-hidden mb-1.5 bg-zinc-100 cursor-pointer"
+                  className="relative h-24 bg-zinc-100 cursor-pointer"
                   onClick={() => {
                     setActiveTicketModal(ticket);
                     setTicketSelectedCategoryIdx(0);
@@ -1063,37 +1186,39 @@ export default function MobileB2CHome({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <span className="absolute bottom-1 right-1 bg-black/75 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
+                  {ticket.trending && (
+                    <span className="absolute top-1.5 left-1.5 bg-amber-400 text-zinc-950 text-[9px] font-extrabold px-1.5 py-0.5 rounded inline-flex items-center gap-0.5">
+                      <Flame className="w-2.5 h-2.5 shrink-0" />
+                      Trending
+                    </span>
+                  )}
+                  <span className="absolute bottom-1.5 left-2 right-2 text-white text-[10px] font-semibold truncate">
                     {ticket.location || 'Malaysia'}
                   </span>
-                  <div className="absolute top-1 left-1 bg-purple-900 text-white text-[7.5px] font-bold px-1 py-0.5 rounded flex items-center gap-0.5">
-                    <QrCode className="w-2.5 h-2.5" />
-                    <span>Instant QR</span>
-                  </div>
                 </div>
 
-                <div>
-                  <h4
-                    onClick={() => {
-                      setActiveTicketModal(ticket);
-                      setTicketSelectedCategoryIdx(0);
-                    }}
-                    className="text-[11px] font-black text-zinc-900 line-clamp-2 leading-tight hover:text-emerald-700 cursor-pointer"
-                  >
-                    {ticket.name}
-                  </h4>
-
-                  {/* Options Available badge */}
-                  <div className="text-[8.5px] text-zinc-500 mt-1 flex items-center justify-between">
-                    <span>{ticket.ticketCategories?.length ? `${ticket.ticketCategories.length} Options` : 'Standard Pass'}</span>
-                    <span className="text-purple-700 font-semibold">T&amp;C Details</span>
+                <div className="p-2.5 flex-1 flex flex-col justify-between">
+                  <div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-purple-700 block mb-0.5">
+                      Gate E-Ticket
+                    </span>
+                    <h4
+                      onClick={() => {
+                        setActiveTicketModal(ticket);
+                        setTicketSelectedCategoryIdx(0);
+                      }}
+                      className="text-xs font-bold text-zinc-900 line-clamp-2 leading-snug hover:text-emerald-700 cursor-pointer"
+                    >
+                      {ticket.name}
+                    </h4>
                   </div>
 
-                  <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-zinc-100">
-                    <div>
-                      <span className="text-[8px] text-zinc-400 block leading-none">From</span>
-                      <span className="text-xs font-black text-emerald-700">
-                        RM {ticket.ticketCategories?.[0]?.price || ticket.price}
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-100">
+                    <div className="tabular-nums">
+                      <span className="text-[9px] text-zinc-400 block leading-none">From</span>
+                      <span className="text-xs font-extrabold text-zinc-950">
+                        {formatPrice(Number(ticket.ticketCategories?.[0]?.price ?? ticket.price) || 0)}
                       </span>
                     </div>
                     <button
@@ -1102,9 +1227,9 @@ export default function MobileB2CHome({
                         setActiveTicketModal(ticket);
                         setTicketSelectedCategoryIdx(0);
                       }}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1 rounded-lg text-[9.5px] font-bold cursor-pointer"
+                      className="bg-zinc-900 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
                     >
-                      Options
+                      Select
                     </button>
                   </div>
                 </div>
@@ -1112,41 +1237,38 @@ export default function MobileB2CHome({
             ))}
           </div>
         </section>
-      )}
 
       {/* =====================================================================
           SECTION C: DIRECT CONTRACTED HOTELS & RESORTS
-          High density cards + 1-Click Quick Modal (Room Categories, Stay T&Cs, Amenities)
       ===================================================================== */}
-      {(activeTab === 'all' || activeTab === 'hotels') && (
-        <section id="section-hotels" data-aistudio-editable="true" className="px-3 pt-3 pb-5 bg-white border-b border-zinc-200">
-          <div className="px-3 mb-2.5">
-            <div className="bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent border-l-4 border-emerald-600 p-3 rounded-r-2xl shadow-2xs flex items-center justify-between">
-              <div>
-                <span className="bg-emerald-600 text-white text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider mb-1 inline-block shadow-2xs">
-                  Direct Contracts
-                </span>
-                <h2 className="text-sm sm:text-base font-black text-zinc-950 flex items-center gap-1.5 tracking-tight">
-                  <span>🏨 Direct Contracted Hotels &amp; Stays</span>
-                </h2>
-                <p className="text-[10px] text-zinc-600 mt-0.5 font-medium">Pre-negotiated net rates with instant room categories &amp; policies</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onNavigate('/hotels')}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black px-3.5 py-1.5 rounded-xl shadow-xs flex items-center gap-1 cursor-pointer shrink-0 transition-colors"
-              >
-                <span>View All</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+      <section id={HOME_SECTIONS.hotels} data-aistudio-editable="true" className="scroll-mt-16 px-3.5 pt-8 pb-8 bg-white border-b border-zinc-200">
+        <div className="mb-5 pb-3.5 border-b border-zinc-200 flex items-end justify-between gap-2">
+          <div className="border-l-4 border-emerald-600 pl-3 min-w-0">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-emerald-700">
+              Hotels &amp; Stays
+            </p>
+            <h2 className="text-xl font-black text-zinc-950 tracking-tight leading-tight mt-0.5">
+              Contracted Hotels &amp; Resorts
+            </h2>
+            <p className="text-[11px] font-medium text-zinc-500 mt-0.5 truncate">
+              Guaranteed local room allotments
+            </p>
+          </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/hotels')}
+              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-0.5 cursor-pointer shrink-0 py-1"
+            >
+              <span>View All</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             {filteredHotels.slice(0, 4).map((hotel) => (
               <div
                 key={hotel.id}
-                className="bg-white border border-zinc-200 hover:border-emerald-400 rounded-2xl p-2 flex items-center gap-2.5 shadow-xs"
+                className="bg-white border border-zinc-200 hover:border-emerald-500 rounded-2xl p-2.5 flex items-center gap-3 transition-colors shadow-2xs"
               >
                 <div
                   className="w-20 h-20 rounded-xl overflow-hidden bg-zinc-100 shrink-0 cursor-pointer relative"
@@ -1161,33 +1283,35 @@ export default function MobileB2CHome({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <span className="absolute bottom-1 left-1 bg-black/75 text-white text-[7.5px] font-bold px-1 rounded">
-                    {hotel.cat || 'Hotel'}
-                  </span>
+                  {hotel.trending && (
+                    <span className="absolute top-1 left-1 bg-amber-400 text-zinc-950 text-[8.5px] font-extrabold px-1.5 py-0.5 rounded inline-flex items-center gap-0.5">
+                      <Flame className="w-2.5 h-2.5 shrink-0" />
+                      Hot
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1 text-[9px] text-zinc-500 font-semibold mb-0.5">
-                    <MapPin className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                    <span className="truncate">{hotel.location || 'Malaysia'}</span>
+                  <div className="text-[9.5px] uppercase tracking-wider text-emerald-700 font-bold truncate">
+                    Hotel Contract · {hotel.cat || 'Direct'} · {hotel.location || 'Malaysia'}
                   </div>
                   <h4
                     onClick={() => {
                       setActiveHotelModal(hotel);
                       setHotelSelectedRoomIdx(0);
                     }}
-                    className="text-xs font-black text-zinc-900 truncate hover:text-emerald-700 cursor-pointer"
+                    className="text-xs font-bold text-zinc-900 truncate hover:text-emerald-700 cursor-pointer mt-0.5"
                   >
                     {hotel.name}
                   </h4>
-                  <div className="text-[9px] text-zinc-500 font-medium truncate mt-0.5">
-                    {hotel.roomCategories?.length ? `${hotel.roomCategories.length} Room Types · Free WiFi` : 'Direct Rate'}
+                  <div className="text-[10px] text-zinc-500 truncate mt-0.5">
+                    {hotel.roomCategories?.length ? `${hotel.roomCategories.length} Room Types · Instant Confirm` : 'Direct Nett Allotment'}
                   </div>
 
-                  <div className="flex items-center justify-between mt-1.5 pt-1 border-t border-zinc-100">
-                    <span className="text-xs font-black text-zinc-950">
-                      RM {hotel.roomCategories?.[0]?.price || hotel.price}
-                      <span className="text-[8.5px] font-normal text-zinc-500"> /night</span>
+                  <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-zinc-100">
+                    <span className="text-xs font-extrabold text-zinc-950 tabular-nums">
+                      {formatPrice(Number(hotel.roomCategories?.[0]?.price ?? hotel.price) || 0)}
+                      <span className="text-[10px] font-normal text-zinc-500"> /night</span>
                     </span>
                     <button
                       type="button"
@@ -1195,9 +1319,9 @@ export default function MobileB2CHome({
                         setActiveHotelModal(hotel);
                         setHotelSelectedRoomIdx(0);
                       }}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
                     >
-                      Choose Room
+                      Rooms
                     </button>
                   </div>
                 </div>
@@ -1205,59 +1329,229 @@ export default function MobileB2CHome({
             ))}
           </div>
         </section>
+
+      {/* =====================================================================
+          SECTION D: ONGOING PACKAGE CAMPAIGNS & POSTERS
+      ===================================================================== */}
+      {packagePostersList.length > 0 && (
+        <section id={HOME_SECTIONS.posters} className="scroll-mt-16 pt-7 pb-6 bg-zinc-50 border-b border-zinc-200">
+          <div className="px-3.5 mb-4 pb-3 border-b border-zinc-200 flex items-end justify-between gap-2">
+            <div className="border-l-4 border-rose-600 pl-3">
+              <p className="text-[10.5px] font-mono font-bold uppercase tracking-widest text-rose-700 mb-0.5">
+                Active Departures &amp; Posters
+              </p>
+              <h2 className="text-xl font-black text-zinc-950 tracking-tight leading-tight">
+                Ongoing Package Posters
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/search', { category: 'Packages' })}
+              className="text-xs font-bold text-emerald-700 flex items-center gap-0.5 cursor-pointer py-1 shrink-0"
+            >
+              <span>All Tours</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex gap-3 overflow-x-auto overscroll-x-contain snap-x snap-mandatory px-3.5 pb-1 no-scrollbar">
+            {packagePostersList.map((poster) => {
+              const linkedPkg = packages.find((p) => p.id === poster.linkedPackageId);
+              return (
+                <div
+                  key={poster.id}
+                  onClick={() => {
+                    if (linkedPkg) {
+                      setActivePackageModal(linkedPkg);
+                    } else {
+                      onNavigate('/search', { query: poster.destination });
+                    }
+                  }}
+                  className="w-[260px] h-44 shrink-0 snap-start rounded-2xl overflow-hidden relative bg-zinc-900 border border-zinc-200 shadow-xs cursor-pointer group"
+                >
+                  <img
+                    src={resolveImage(poster.imageUrl, 'langkawi')}
+                    alt={poster.title}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-zinc-950/95 via-zinc-950/35 to-black/25 p-3.5 flex flex-col justify-between">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="bg-amber-400 text-zinc-950 text-[9.5px] font-black px-2 py-0.5 rounded-md tracking-wide uppercase">
+                        {poster.badge}
+                      </span>
+                      {poster.tag && (
+                        <span className="bg-black/65 text-white text-[10px] font-bold px-2 py-0.5 rounded-md">
+                          {poster.tag}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-extrabold text-white leading-snug line-clamp-1">
+                        {poster.title}
+                      </h3>
+                      <p className="text-[10.5px] text-zinc-200 line-clamp-1 mt-0.5">
+                        {poster.subtitle}
+                      </p>
+                      <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-white/15 text-[11px]">
+                        <span className="font-bold text-amber-300 tabular-nums">{poster.priceLabel}</span>
+                        <span className="text-white/90 font-semibold flex items-center gap-0.5">
+                          <span>View Poster</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
-      {/* 7. PARTNER ALLIANCE MARQUEE (Controllable by Admin) */}
-      {globalSettings.partnerMarqueeEnabled !== false && (
-        <section className="bg-white border-t border-b border-zinc-200 py-3 overflow-hidden mt-2">
-          <div className="px-3 mb-1.5 flex items-center justify-between">
-            <div className="flex items-center gap-1 text-[10px] font-bold text-zinc-700">
-              <Award className="w-3 h-3 text-emerald-600" />
-              <span>Partner Alliances &amp; Registered Supplier Network</span>
+      {/* Flights moved into the Upper View above */}
+
+      {/* =====================================================================
+          SECTION F: PACKAGE COLLAGE & RECENT COMPLETED TRIPS WITH REVIEWS & PHOTOS
+      ===================================================================== */}
+      <section id={HOME_SECTIONS.gallery} className="scroll-mt-16 px-3.5 pt-7 pb-6 bg-zinc-50 border-b border-zinc-200 space-y-6">
+        {/* Sub-part 1: Package Visual Collage */}
+        <div>
+          <div className="mb-3.5 pb-3 border-b border-zinc-200 flex items-end justify-between gap-2">
+            <div className="border-l-4 border-emerald-600 pl-3">
+              <p className="text-[10.5px] font-mono font-bold uppercase tracking-widest text-emerald-700 mb-0.5">
+                Featured Trips Visual Collage
+              </p>
+              <h2 className="text-xl font-black text-zinc-950 tracking-tight leading-tight">
+                Packages &amp; Malaysia Gallery
+              </h2>
+            </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('/search')}
+                className="text-xs font-bold text-emerald-700 flex items-center gap-0.5 cursor-pointer py-1 shrink-0"
+              >
+                <span>Explore</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 rounded-2xl overflow-hidden">
+              {packages.slice(0, 6).map((pkg, idx) => (
+                <button
+                  key={pkg.id}
+                  type="button"
+                  onClick={() => setActivePackageModal(pkg)}
+                  className={`relative overflow-hidden bg-zinc-900 group cursor-pointer ${
+                    idx === 0 ? 'col-span-2 row-span-2 h-44' : 'col-span-1 h-[85px]'
+                  }`}
+                >
+                  <img
+                    src={resolveImage(pkg.image, 'langkawi')}
+                    alt={pkg.title}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent p-2 flex flex-col justify-end text-left">
+                    <span className="text-[9.5px] font-bold text-amber-300 leading-none truncate">
+                      {pkg.destination}
+                    </span>
+                    <span className={`font-extrabold text-white leading-tight line-clamp-1 ${idx === 0 ? 'text-xs mt-0.5' : 'text-[10px] mt-0.5'}`}>
+                      {pkg.title}
+                    </span>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 
-          <div className="relative w-full overflow-hidden py-0.5">
-            <div
-              className={`flex gap-3 w-max gfk-marquee-track ${
-                globalSettings.partnerMarqueeDirection === 'right'
-                  ? `gfk-marquee-right-${globalSettings.partnerMarqueeSpeed || 'normal'}`
-                  : `gfk-marquee-left-${globalSettings.partnerMarqueeSpeed || 'normal'}`
-              }`}
-            >
-              {[
-                ...(globalSettings.partnerMarqueeLogos || []),
-                ...(globalSettings.partnerMarqueeLogos || [])
-              ].map((logo, idx) => (
+          {/* Sub-part 2: Recent Packages That Went Through — Traveler Photos & Reviews */}
+          <div>
+            <div className="mb-3.5 pb-3 border-b border-zinc-200 flex items-end justify-between gap-2">
+              <div className="border-l-4 border-amber-500 pl-3">
+                <p className="text-[10.5px] font-mono font-bold uppercase tracking-widest text-amber-700 mb-0.5">
+                  Completed Groups · 4.9 / 5 Verified
+                </p>
+                <h2 className="text-xl font-black text-zinc-950 tracking-tight leading-tight">
+                  Recent Trips &amp; Guest Reviews
+                </h2>
+              </div>
+              <span className="text-[10px] font-semibold text-zinc-500 shrink-0">
+                Tap photo to view
+              </span>
+            </div>
+
+            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain snap-x snap-mandatory pb-1 no-scrollbar">
+              {customerMediaList.map((item) => (
                 <div
-                  key={`${logo.id}-${idx}`}
-                  className="flex items-center gap-1.5 bg-white border border-zinc-200 rounded-xl px-2.5 py-1.5 shrink-0 shadow-2xs"
+                  key={item.id}
+                  onClick={() => setActiveReviewLightbox(item)}
+                  className="w-[248px] shrink-0 snap-start bg-white border border-zinc-200 rounded-2xl overflow-hidden flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
                 >
-                  <div className="w-7 h-6 rounded-md bg-zinc-50 border border-zinc-200 p-0.5 flex items-center justify-center shrink-0 overflow-hidden">
-                    <img
-                      src={logo.logoUrl}
-                      alt={logo.name}
-                      referrerPolicy="no-referrer"
-                      className="max-h-full max-w-full object-contain"
-                    />
-                  </div>
                   <div>
-                    <div className="text-[10px] font-extrabold text-zinc-900 tracking-tight flex items-center gap-1">
-                      <span>{logo.name}</span>
-                      {logo.verified && (
-                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                    <div className="relative h-32 bg-zinc-900 overflow-hidden">
+                      {item.type === 'video' ? (
+                        <>
+                          <img
+                            src={item.posterUrl || resolveImage('kl')}
+                            alt={item.experienceTitle}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-2 right-2 bg-black/75 text-amber-300 px-2 py-0.5 rounded-md text-[9.5px] font-bold flex items-center gap-1">
+                            <Play className="w-2.5 h-2.5 fill-amber-300" />
+                            <span>Video</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <img
+                            src={item.url}
+                            alt={item.experienceTitle}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-2 right-2 bg-black/75 text-emerald-300 px-2 py-0.5 rounded-md text-[9.5px] font-bold flex items-center gap-1">
+                            <Camera className="w-2.5 h-2.5" />
+                            <span>Trip Photo</span>
+                          </div>
+                        </>
                       )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                      <div className="absolute bottom-2 left-2.5 right-2.5 flex items-center justify-between text-[10px] text-white font-semibold">
+                        <span className="truncate">{item.location}</span>
+                        <span className="text-amber-300 shrink-0 ml-1 tabular-nums">
+                          ★ {item.rating || 5}.0
+                        </span>
+                      </div>
                     </div>
-                    <p className="text-[7.5px] text-zinc-500 font-medium leading-none">
-                      {logo.subtitle || logo.badgeText || 'Verified'}
-                    </p>
+
+                    <div className="p-3">
+                      <div className="text-[10px] font-bold text-emerald-700 truncate">
+                        {item.experienceTitle}
+                      </div>
+                      <p className="text-[11px] text-zinc-700 leading-relaxed line-clamp-2 mt-1">
+                        &ldquo;{item.caption}&rdquo;
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="px-3 pb-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-500">
+                    <span className="font-bold text-zinc-900 truncate">{item.customerName}</span>
+                    <span className="shrink-0 ml-1">{item.date}</span>
                   </div>
                 </div>
               ))}
             </div>
           </div>
         </section>
-      )}
+
+      {/* 7. RIGHT-TO-LEFT PARTNER PREVIEW TICKER */}
+      <PartnerAllianceSection
+        settings={globalSettings}
+        onNavigate={onNavigate}
+        variant="mobile"
+      />
 
       {/* 8. TRAVELER TRUST GUARANTEE */}
       <section className="px-3 pt-3 bg-white">
@@ -1489,6 +1783,37 @@ export default function MobileB2CHome({
                       </button>
                     </div>
                   </div>
+
+                  {/* External Marketplace Options (Viator & TripAdvisor) */}
+                  <div className="p-2.5 bg-zinc-950/90 border border-zinc-800 rounded-xl flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-semibold text-zinc-400">Also bookable via:</span>
+                    <div className="flex items-center gap-1.5">
+                      <a
+                        href={
+                          activeTicketModal.viatorUrl ||
+                          `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <span>Viator</span>
+                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                      </a>
+                      <a
+                        href={
+                          activeTicketModal.tripadvisorUrl ||
+                          `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <span>TripAdvisor</span>
+                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                      </a>
+                    </div>
+                  </div>
                 </>
               ) : (
                 /* Terms & Conditions Tab */
@@ -1538,8 +1863,7 @@ export default function MobileB2CHome({
               <div>
                 <span className="text-[9px] text-zinc-400 block font-semibold">Total Price ({ticketPax} Passes)</span>
                 <div className="text-base font-black text-white">
-                  RM{' '}
-                  {(((Number(activeTicketModal.ticketCategories?.[ticketSelectedCategoryIdx]?.price ?? activeTicketModal.price) || 0) * ticketPax) || 0).toLocaleString()}
+                  {formatPrice((Number(activeTicketModal.ticketCategories?.[ticketSelectedCategoryIdx]?.price ?? activeTicketModal.price) || 0) * ticketPax)}
                 </div>
               </div>
               <button
@@ -1810,8 +2134,7 @@ export default function MobileB2CHome({
               <div>
                 <span className="text-[9px] text-zinc-400 block font-semibold">Total Price ({hotelNights} Nights)</span>
                 <div className="text-base font-black text-white">
-                  RM{' '}
-                  {(((Number(activeHotelModal.roomCategories?.[hotelSelectedRoomIdx]?.price ?? activeHotelModal.price) || 0) * hotelNights) || 0).toLocaleString()}
+                  {formatPrice((Number(activeHotelModal.roomCategories?.[hotelSelectedRoomIdx]?.price ?? activeHotelModal.price) || 0) * hotelNights)}
                 </div>
               </div>
               <button
@@ -2003,6 +2326,36 @@ export default function MobileB2CHome({
                       </p>
                     </div>
                   )}
+
+                  <div className="p-2.5 bg-zinc-950/90 border border-zinc-800 rounded-xl flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-semibold text-zinc-400">Or reserve via portal:</span>
+                    <div className="flex items-center gap-1.5">
+                      <a
+                        href={
+                          activePackageModal.viatorUrl ||
+                          `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <span>Viator</span>
+                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                      </a>
+                      <a
+                        href={
+                          activePackageModal.tripadvisorUrl ||
+                          `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-[10px] font-bold text-[#34E0A1] inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <span>TripAdvisor</span>
+                        <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                      </a>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -2012,7 +2365,7 @@ export default function MobileB2CHome({
               <div>
                 <span className="text-[9px] text-zinc-400 block font-semibold">Total ({packagePax} Travelers)</span>
                 <div className="text-base font-black text-white">
-                  RM {(((Number(activePackageModal.base_price) || 0) * packagePax) || 0).toLocaleString()}
+                  {formatPrice((Number(activePackageModal.base_price) || 0) * packagePax)}
                 </div>
               </div>
               <button
@@ -2021,6 +2374,81 @@ export default function MobileB2CHome({
                 className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs py-3 px-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <span>Book This Package Now</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          INTERACTIVE LIGHTBOX SHEET 4: COMPLETED TRIP PHOTO / VIDEO & REVIEW
+      ===================================================================== */}
+      {activeReviewLightbox && (
+        <div
+          className="fixed inset-0 z-[90] flex flex-col justify-end bg-black/80 backdrop-blur-xs animate-fade-in"
+          onClick={() => setActiveReviewLightbox(null)}
+        >
+          <div
+            className="w-full bg-zinc-900 border-t border-zinc-700 rounded-t-3xl max-h-[88vh] flex flex-col overflow-hidden text-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative h-60 bg-black shrink-0">
+              {activeReviewLightbox.type === 'video' ? (
+                <video
+                  src={activeReviewLightbox.url}
+                  poster={activeReviewLightbox.posterUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <img
+                  src={activeReviewLightbox.url}
+                  alt={activeReviewLightbox.experienceTitle}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveReviewLightbox(null)}
+                className="absolute top-3 right-3 p-2 rounded-full bg-black/75 text-white hover:bg-black cursor-pointer"
+                aria-label="Close review"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-2.5 overflow-y-auto">
+              <div className="flex items-center justify-between text-[11px] font-bold">
+                <span className="text-emerald-400">{activeReviewLightbox.location}</span>
+                <span className="text-amber-400">
+                  {'★'.repeat(activeReviewLightbox.rating || 5)} Completed Trip
+                </span>
+              </div>
+              <h3 className="text-base font-extrabold text-white leading-snug">
+                {activeReviewLightbox.experienceTitle}
+              </h3>
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                &ldquo;{activeReviewLightbox.caption}&rdquo;
+              </p>
+              <div className="text-[11px] text-zinc-400 pt-1">
+                Traveled by <strong className="text-white">{activeReviewLightbox.customerName}</strong> · {activeReviewLightbox.date}
+              </div>
+            </div>
+
+            <div className="p-3.5 border-t border-zinc-800 bg-zinc-950 flex items-center gap-2 shrink-0 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))]">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveReviewLightbox(null);
+                  onNavigate('/search');
+                }}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>Book Similar Malaysia Package</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>

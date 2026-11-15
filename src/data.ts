@@ -10,6 +10,8 @@ import {
   SocialMediaChannel,
   OtaPartner,
   PartnerLogoItem,
+  AvailableFlight,
+  PackagePoster,
   GlobalSettings
 } from './types';
 
@@ -51,6 +53,9 @@ export const INITIAL_PACKAGES: Package[] = [
     image: 'langkawi',
     tags: ['Luxury', 'Beach', 'Island Hopping'],
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Langkawi+Island+Hopping+Overwater',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Langkawi+Luxury+Island+Hopping+Tour',
     description: 'Experience Malaysia\'s premier Andaman island paradise with overwater villa stays, private sunset catamaran dining, Langkawi SkyCab & SkyBridge fast-track passes, and Kilim Geoforest mangrove eco-safari.',
     instructions: 'Includes twin-sharing overwater accommodation, daily gourmet breakfast, private return airport transfers from LGK, and sunset yacht dinner cruise.',
     timings: 'Daily Departures · Flexible Check-in',
@@ -108,6 +113,9 @@ export const INITIAL_PACKAGES: Package[] = [
     image: 'kl',
     tags: ['City Highlight', 'Twin Towers', 'Culture'],
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Kuala+Lumpur+Petronas+Twin+Towers+Batu+Caves',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Kuala+Lumpur+Twin+Towers+Batu+Caves+Tour',
     description: 'Stay in the heart of Bukit Bintang & KLCC. Includes skip-the-line Petronas Twin Towers Skybridge & 86th Floor tickets, Batu Caves & Royal Selangor heritage tour, KL Tower Atmosphere 360 revolving high-tea, and private airport transfers.',
     instructions: 'Includes 4-star/5-star KLCC hotel stay, guaranteed Twin Towers slot, private chauffeur-guide, and KLIA Ekspres or private car return transfer.',
     timings: 'Daily · 09:00 AM - 09:00 PM',
@@ -161,6 +169,9 @@ export const INITIAL_PACKAGES: Package[] = [
     image: 'penang',
     tags: ['UNESCO Heritage', 'Food Trail', 'Culture'],
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Penang+George+Town+Heritage+Food+Tour',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Penang+George+Town+Heritage+Food+Tour',
     description: 'Discover the cultural soul of Malaysia across George Town\'s UNESCO streets, Pinang Peranakan Mansion, Kek Lok Si Temple, Clan Jetties, The Habitat Penang Hill canopy walk, and curated Michelin Bib Gourmand street food tastings.',
     instructions: 'Includes boutique heritage Mansion stay, Fast-Lane Penang Hill funicular pass, guided trishaw ride, and private culinary guide.',
     timings: 'Daily · Flexible Start',
@@ -214,6 +225,9 @@ export const INITIAL_PACKAGES: Package[] = [
     image: 'semporna',
     tags: ['Crystal Water', 'Snorkeling', 'Maldives of Malaysia'],
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Semporna+Bohey+Dulang+Mabul+Island+Tour',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Semporna+Bohey+Dulang+Mabul+Dive+Tour',
     description: 'Sail across the world\'s most biodiverse coral triangle in Semporna. Hike Bohey Dulang viewpoint, snorkel pristine Sibuan & Mataking coral reefs, and stay in luxury water bungalows over translucent turquoise lagoons.',
     instructions: 'Includes Tawau Airport (TWU) return transfers, speedboat island hopping permits, snorkeling gear, underwater photography by boat crew, and full-board meals.',
     timings: 'Daily Departures from Tawau / Semporna Jetty',
@@ -255,7 +269,7 @@ export const INITIAL_PACKAGES: Package[] = [
 ];
 
 export const INITIAL_TRANSPORT: TransportRoute[] = [
-  { id: 'tr-1', name: 'KLIA / KLIA2 Airport ↔ Kuala Lumpur City Hotel (Private Transfer)', image: 'transfer', car: 110, mpv: 120, van7: 180, van13: 250, rating: 4.9, reviews: 640, instructions: 'Includes flight tracking, 60-minute complimentary airport waiting time, highway tolls, and fuel.', termsAndConditions: 'Free cancellation up to 6 hours before scheduled pickup. Child safety seats available upon request.', timings: '24/7 Service' },
+  { id: 'tr-1', name: 'KLIA / KLIA2 Airport ↔ Kuala Lumpur City Hotel (Private Transfer)', image: 'transfer', car: 110, mpv: 120, van7: 180, van13: 250, rating: 4.9, reviews: 640, trending: true, viatorUrl: 'https://www.viator.com/searchResults/all?text=KLIA+Kuala+Lumpur+Private+Airport+Transfer', tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Kuala+Lumpur+Airport+Private+Transfer', instructions: 'Includes flight tracking, 60-minute complimentary airport waiting time, highway tolls, and fuel.', termsAndConditions: 'Free cancellation up to 6 hours before scheduled pickup. Child safety seats available upon request.', timings: '24/7 Service' },
   { id: 'tr-2', name: 'KLIA Airport → KL Hotel via Putrajaya Pink Mosque Photo Stop', image: 'transfer', car: 160, mpv: 180, van7: 250, van13: 300, rating: 4.8, reviews: 215, instructions: 'Includes 2-hour Putrajaya sightseeing stop enroute to your Kuala Lumpur hotel.', termsAndConditions: 'Tolls, parking, and luggage assistance included.', timings: '24/7 Service' },
   { id: 'tr-3', name: 'KLIA / KLIA2 Airport ↔ Genting Highlands Resort (Direct)', image: 'genting', car: 200, mpv: 220, van7: 300, van13: 400, rating: 4.9, reviews: 310, instructions: 'Direct door-to-door mountain highway transfer.', termsAndConditions: 'Direct express highway transfer with mountain-certified drivers.', timings: '24/7 Service' },
   { id: 'tr-4', name: 'Kuala Lumpur Hotel ↔ Genting Highlands (One-Way Private)', image: 'genting', car: 130, mpv: 140, van7: 250, van13: 320, rating: 4.8, reviews: 420, instructions: 'Includes optional stop at Batu Caves (45 mins) upon request.', termsAndConditions: 'Fixed price with no surge pricing.', timings: 'Daily · 07:00 AM - 10:00 PM' },
@@ -269,7 +283,7 @@ export const INITIAL_TRANSPORT: TransportRoute[] = [
   { id: 'tr-12', name: 'Genting Highlands Private Day Charter (10 Hours Chauffeur)', image: 'genting', car: 280, mpv: 300, van7: 450, van13: 550, rating: 4.9, instructions: 'Private driver at your disposal for 10 hours.', timings: '10 Hours Flexible Charter' },
   { id: 'tr-13', name: 'Cameron Highlands Day Charter + Tea & Countryside Tour', image: 'cameron', car: 700, mpv: 800, van7: 950, van13: 1050, rating: 4.9, instructions: 'Full day private charter covering strawberry farms, BOH tea gardens, and waterfalls.', timings: 'Full Day Charter' },
   { id: 'tr-14', name: 'Kuala Lumpur Half-Day City Highlights + Batu Caves (4 Hours)', image: 'kl', car: 100, mpv: 120, van7: 250, van13: 300, rating: 4.9, instructions: 'Covering National Mosque, King\'s Palace, Independence Square, and Batu Caves.', timings: '4-Hour Sightseeing Charter' },
-  { id: 'tr-15', name: 'Kuala Lumpur Full-Day Private Chauffeur + Twin Towers Photo Stop (8 Hours)', image: 'petronas', car: 150, mpv: 180, van7: 300, van13: 400, rating: 5.0, instructions: 'Flexible itinerary, driver-guided trip (8 hours).', timings: '8-Hour VIP Chauffeur' }
+  { id: 'tr-15', name: 'Kuala Lumpur Full-Day Private Chauffeur + Twin Towers Photo Stop (8 Hours)', image: 'petronas', car: 150, mpv: 180, van7: 300, van13: 400, rating: 5.0, trending: true, viatorUrl: 'https://www.viator.com/searchResults/all?text=Kuala+Lumpur+Private+Full+Day+Chauffeur+Tour', tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Kuala+Lumpur+Private+Day+Chauffeur+Tour', instructions: 'Flexible itinerary, driver-guided trip (8 hours).', timings: '8-Hour VIP Chauffeur' }
 ];
 
 export const INITIAL_HOTELS: Hotel[] = [
@@ -441,6 +455,9 @@ export const INITIAL_HOTELS: Hotel[] = [
     reviews: 410,
     contractBadge: 'Direct DMC Contract Rate',
     featuredContract: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/Kuala-Lumpur/d335-ttd',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=ibis+Kuala+Lumpur+City+Centre',
     instructions: 'Rooftop infinity pool with spectacular Petronas Twin Towers view.',
     timings: 'Check-in: 3:00 PM | Check-out: 12:00 PM',
     childPolicy: 'Children stay free. Baby cots available upon request.',
@@ -486,6 +503,8 @@ export const INITIAL_HOTELS: Hotel[] = [
     reviews: 580,
     contractBadge: 'Official 5-Star Contract',
     featuredContract: true,
+    trending: true,
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Berjaya+Times+Square+Hotel+Kuala+Lumpur',
     instructions: 'Directly integrated with shopping mall, indoor theme park, and Imbi Monorail.',
     timings: 'Check-in: 3:00 PM | Check-out: 12:00 PM',
     childPolicy: 'Children under 12 stay free. High chairs and cribs provided.',
@@ -555,6 +574,9 @@ export const INITIAL_HOTELS: Hotel[] = [
     reviews: 490,
     contractBadge: 'Exclusive Island Contract',
     featuredContract: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/Langkawi/d22078-ttd',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Berjaya+Langkawi+Resort',
     instructions: 'Rainforest and overwater chalets steps from Langkawi SkyCab.',
     timings: 'Check-in: 3:00 PM | Check-out: 12:00 PM',
     childPolicy: 'Children aged 0–11 stay free. Complimentary baby cot available.',
@@ -710,6 +732,9 @@ export const INITIAL_TICKETS: Ticket[] = [
     rating: 4.9,
     reviews: 1120,
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Sunway+Lagoon+Kuala+Lumpur',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Sunway+Lagoon+Malaysia+Tickets',
     info: 'All 6 Parks | Express E-Voucher',
     addInfo: '10:00 AM - 6:00 PM (Closed Tue)',
     instructions: 'Includes Water Park, Amusement Park, Wildlife Park, Extreme Park, Scream Park & Nickelodeon Lost Lagoon.',
@@ -754,6 +779,9 @@ export const INITIAL_TICKETS: Ticket[] = [
     rating: 4.9,
     reviews: 870,
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Genting+SkyWorlds+Theme+Park',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Genting+SkyWorlds+Theme+Park',
     info: 'Includes Complimentary Virtual Queue (VQ)',
     addInfo: '11:00 AM - 6:00 PM',
     instructions: 'Link your QR ticket in the Genting SkyWorlds App for complimentary VQ ride reservations.',
@@ -777,6 +805,9 @@ export const INITIAL_TICKETS: Ticket[] = [
     rating: 5.0,
     reviews: 1450,
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Petronas+Twin+Towers+Observation+Deck',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Petronas+Twin+Towers+Tickets',
     info: 'Guaranteed Time Slot | Authorized Allotment',
     addInfo: '09:00 AM - 09:00 PM (Closed Mon)',
     instructions: 'Official timed-entry ticket to the Double-Decker Skybridge (Level 41/42) and Level 86 Spire Deck.',
@@ -801,6 +832,9 @@ export const INITIAL_TICKETS: Ticket[] = [
     rating: 4.9,
     reviews: 460,
     featured: true,
+    trending: true,
+    viatorUrl: 'https://www.viator.com/searchResults/all?text=Langkawi+Sunset+Dinner+Cruise',
+    tripadvisorUrl: 'https://www.tripadvisor.com/Search?q=Langkawi+Sunset+Dinner+Cruise',
     info: 'Daily Sunset Sail | Jacuzzi Net & BBQ Buffet',
     addInfo: '4:30 PM - 8:00 PM',
     instructions: 'Set sail across the Andaman Straits with live music, saltwater jacuzzi net, and gourmet buffet.',
@@ -1129,6 +1163,34 @@ export const DEFAULT_HOTEL_PARTNER_LOGOS: PartnerLogoItem[] = [
 
 export const DEFAULT_OTA_PARTNERS: OtaPartner[] = [
   {
+    id: 'ota-3',
+    name: 'Viator',
+    logoUrl: createBrandSvgDataUri('#064e3b', '#00AA6C', 'VTR', 'VIATOR'),
+    roleBadge: 'Badge of Excellence Operator',
+    description: 'Reserve now & pay later with free 24-hour cancellation and Viator Experience Awards across Malaysia tours, skydecks & private transfers.',
+    rating: '4.9 / 5.0',
+    reviewsCount: '11,800+ Global Reviews',
+    accentColor: '#00AA6C',
+    url: 'https://www.viator.com/Malaysia/d18-ttd',
+    verified: true,
+    ctaLabel: 'Book on Viator',
+    perks: ['Reserve Now & Pay Later', 'Free 24h Cancellation', 'Traveler Protection']
+  },
+  {
+    id: 'ota-tripadvisor',
+    name: 'TripAdvisor',
+    logoUrl: createBrandSvgDataUri('#052e16', '#34E0A1', 'TA', 'TRIPADVISOR'),
+    roleBadge: 'Travelers\' Choice Ground Partner',
+    description: 'Book top-reviewed Malaysia day tours, heritage food walks & island cruises backed by verified traveler ratings and TripAdvisor support.',
+    rating: '4.9 / 5.0',
+    reviewsCount: '15,600+ Verified Reviews',
+    accentColor: '#34E0A1',
+    url: 'https://www.tripadvisor.com/Attractions-g293951-Activities-Malaysia.html',
+    verified: true,
+    ctaLabel: 'Book on TripAdvisor',
+    perks: ['Verified Global Reviews', 'Lowest Price Guarantee', '24/7 Traveler Support']
+  },
+  {
     id: 'ota-1',
     name: 'GetYourGuide',
     logoUrl: createBrandSvgDataUri('#431407', '#FF5533', 'GYG', 'GETYOURGUIDE'),
@@ -1137,8 +1199,10 @@ export const DEFAULT_OTA_PARTNERS: OtaPartner[] = [
     rating: '4.9 / 5.0',
     reviewsCount: '14,200+ Verified Bookings',
     accentColor: '#FF5533',
-    url: 'https://www.getyourguide.com',
-    verified: true
+    url: 'https://www.getyourguide.com/malaysia-l169083/',
+    verified: true,
+    ctaLabel: 'Book on GetYourGuide',
+    perks: ['Instant Mobile Voucher', 'Skip-the-Line Access', 'Verified Local Guide']
   },
   {
     id: 'ota-2',
@@ -1149,20 +1213,10 @@ export const DEFAULT_OTA_PARTNERS: OtaPartner[] = [
     rating: '4.9 / 5.0',
     reviewsCount: '28,500+ Travelers Served',
     accentColor: '#2577E3',
-    url: 'https://www.trip.com',
-    verified: true
-  },
-  {
-    id: 'ota-3',
-    name: 'Viator',
-    logoUrl: createBrandSvgDataUri('#064e3b', '#00AA6C', 'VTR', 'VIATOR'),
-    roleBadge: 'Badge of Excellence Supplier',
-    description: 'Top-rated local tour operator supplying private Malaysia shore excursions, heritage trails, and VIP charters.',
-    rating: '4.9 / 5.0',
-    reviewsCount: '11,800+ Global Reviews',
-    accentColor: '#00AA6C',
-    url: 'https://www.viator.com',
-    verified: true
+    url: 'https://www.trip.com/things-to-do/malaysia/',
+    verified: true,
+    ctaLabel: 'Book on Trip.com',
+    perks: ['Instant Ticket QR', 'Multi-Currency Pay', 'Allotment Guarantee']
   },
   {
     id: 'ota-4',
@@ -1173,8 +1227,10 @@ export const DEFAULT_OTA_PARTNERS: OtaPartner[] = [
     rating: '4.8 / 5.0',
     reviewsCount: '19,400+ Instant Vouchers',
     accentColor: '#FF5722',
-    url: 'https://www.klook.com',
-    verified: true
+    url: 'https://www.klook.com/country/malaysia-things-to-do/',
+    verified: true,
+    ctaLabel: 'Book on Klook',
+    perks: ['Direct Gate Entry', 'Combo Savings', 'Fleet Dispatch']
   },
   {
     id: 'ota-5',
@@ -1185,8 +1241,10 @@ export const DEFAULT_OTA_PARTNERS: OtaPartner[] = [
     rating: '4.9 / 5.0',
     reviewsCount: '16,900+ Stay Packages',
     accentColor: '#818cf8',
-    url: 'https://www.agoda.com',
-    verified: true
+    url: 'https://www.agoda.com/country/malaysia.html',
+    verified: true,
+    ctaLabel: 'Explore Stays',
+    perks: ['Contracted Rates', 'Instant Stay Confirm', 'Airport Transfer Bundles']
   }
 ];
 
@@ -1266,6 +1324,124 @@ export const DEFAULT_FLIGHT_PARTNER_LOGOS: PartnerLogoItem[] = [
 export const DEFAULT_SEO_KEYWORDS =
   'Malaysia tour packages, book Malaysia activities, Kuala Lumpur attraction tickets, Langkawi luxury tour package, Petronas Twin Towers Skybridge tickets, Genting SkyWorlds tickets, Penang heritage tour, Sabah Borneo wildlife expedition, Semporna Mabul island hopping, Cameron Highlands tea tour, Sunway Lagoon tickets, KLIA private airport transfer, Malaysia DMC, GFK Holidays Malaysia, GetYourGuide Malaysia supplier, Viator Malaysia tours, Trip.com Malaysia partner';
 
+export const DEFAULT_AVAILABLE_FLIGHTS: AvailableFlight[] = [
+  {
+    id: 'fl-1',
+    flightNumber: 'MH 1432',
+    airline: 'Malaysia Airlines',
+    originCode: 'KUL',
+    originCity: 'Kuala Lumpur (KLIA T1)',
+    destinationCode: 'LGK',
+    destinationCity: 'Langkawi Island',
+    departureDate: '2026-11-22',
+    departureTime: '09:15',
+    arrivalTime: '10:20',
+    tripTitle: 'Langkawi Luxury Overwater Escape 4D3N',
+    status: 'ON TIME',
+    seatsAvailable: 14,
+    farePerPax: 289,
+    cabinClass: 'Economy Flex',
+    baggage: '20kg Checked + 7kg Cabin',
+    notes: 'Confirmed group allotment · Airport chauffeur meets arrival gate'
+  },
+  {
+    id: 'fl-2',
+    flightNumber: 'AK 5110',
+    airline: 'AirAsia Malaysia',
+    originCode: 'KUL',
+    originCity: 'Kuala Lumpur (KLIA2)',
+    destinationCode: 'BKI',
+    destinationCity: 'Kota Kinabalu, Sabah',
+    departureDate: '2026-11-25',
+    departureTime: '07:40',
+    arrivalTime: '10:20',
+    tripTitle: 'Sabah Borneo Rainforest & Wildlife 5D4N',
+    status: 'LIMITED SEATS',
+    seatsAvailable: 6,
+    farePerPax: 345,
+    cabinClass: 'Value Pack',
+    baggage: '20kg Checked + Meal',
+    notes: 'Synchronized with morning river safari departure'
+  },
+  {
+    id: 'fl-3',
+    flightNumber: 'OD 2104',
+    airline: 'Batik Air Malaysia',
+    originCode: 'SZB',
+    originCity: 'Subang SkyPark, KL',
+    destinationCode: 'PEN',
+    destinationCity: 'George Town, Penang',
+    departureDate: '2026-11-28',
+    departureTime: '11:30',
+    arrivalTime: '12:30',
+    tripTitle: 'Penang Heritage & Michelin Hawker 3D2N',
+    status: 'SCHEDULED',
+    seatsAvailable: 18,
+    farePerPax: 198,
+    cabinClass: 'Economy Value',
+    baggage: '15kg Checked + 7kg Cabin',
+    notes: 'Direct city-airport hop · Private heritage van at Penang terminal'
+  },
+  {
+    id: 'fl-4',
+    flightNumber: 'MH 2664',
+    airline: 'Malaysia Airlines',
+    originCode: 'KUL',
+    originCity: 'Kuala Lumpur (KLIA T1)',
+    destinationCode: 'TWU',
+    destinationCity: 'Tawau (Semporna / Mabul)',
+    departureDate: '2026-12-03',
+    departureTime: '08:25',
+    arrivalTime: '11:20',
+    tripTitle: 'Semporna & Mabul Water Bungalow 4D3N',
+    status: 'SCHEDULED',
+    seatsAvailable: 11,
+    farePerPax: 410,
+    cabinClass: 'Economy Standard',
+    baggage: '20kg Checked + 7kg Cabin',
+    notes: 'Speedboat jetty transfer timed cleanly for 12:30 PM island check-in'
+  }
+];
+
+export const DEFAULT_PACKAGE_POSTERS: PackagePoster[] = [
+  {
+    id: 'pst-1',
+    title: 'Langkawi Archipelago Escape',
+    subtitle: 'Overwater resort stay, Sunset Catamaran & SkyBridge VIP entry',
+    badge: 'ONGOING DEPARTURE',
+    tag: '4D3N · Save 20%',
+    imageUrl: 'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=900&q=80',
+    destination: 'Langkawi, Kedah',
+    priceLabel: 'RM 1,705',
+    validUntil: 'Nov – Dec 2026 Departures',
+    linkedPackageId: 'pkg-1'
+  },
+  {
+    id: 'pst-2',
+    title: 'Sabah & Semporna Dive Retreat',
+    subtitle: 'Borneo wildlife river cruise + Mabul crystal water villas',
+    badge: 'LIMITED SLOTS',
+    tag: '5D4N · Guided',
+    imageUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=900&q=80',
+    destination: 'Semporna, Sabah',
+    priceLabel: 'RM 2,150',
+    validUntil: 'Upcoming Group Dates',
+    linkedPackageId: 'pkg-2'
+  },
+  {
+    id: 'pst-3',
+    title: 'KL City & Genting Cloud Highlights',
+    subtitle: 'Petronas Skybridge, Batu Caves & Genting SkyWorlds pass',
+    badge: 'BEST SELLER',
+    tag: '3D2N · Instant QR',
+    imageUrl: 'https://images.unsplash.com/photo-1596422846543-75c6fc1f4767?auto=format&fit=crop&w=900&q=80',
+    destination: 'Kuala Lumpur & Genting',
+    priceLabel: 'RM 850',
+    validUntil: 'Daily Guaranteed Departure',
+    linkedPackageId: 'pkg-3'
+  }
+];
+
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   id: 'global',
   logoUrl: '/gfk-custom-logo.webp',
@@ -1307,17 +1483,22 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   customerMedia: DEFAULT_CUSTOMER_MEDIA,
   socialChannels: DEFAULT_SOCIAL_CHANNELS,
   otaPartners: DEFAULT_OTA_PARTNERS,
+  availableFlights: DEFAULT_AVAILABLE_FLIGHTS,
+  packagePosters: DEFAULT_PACKAGE_POSTERS,
   seoTitle: 'GFK Holidays Malaysia | Book Best Malaysia Tour Packages, Activities & Hotels',
   seoDescription: 'Book Malaysia\'s top-rated tour packages, attraction tickets, Langkawi & Sabah island escapes, private transfers, and contracted hotels directly with GFK Holidays — Official Supplier on GetYourGuide, Trip.com & Viator.',
   seoKeywords: DEFAULT_SEO_KEYWORDS,
-  invoiceMessage: 'Direct Bank Transfers: Payment proof must be emailed to accounts@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
+  bookingEmail: 'booking@gfkholidays.com',
+  accountsEmail: 'booking@gfkholidays.com',
+  flightsEmail: 'flights@gfkholidays.com',
+  invoiceMessage: 'Direct Bank Transfers: Payment proof must be emailed to booking@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
   bankAccountName: 'GFK HOLIDAYS SDN BHD',
   bankPartner: 'Maybank (Malayan Banking Berhad)',
   bankAccountNumber: '5141 2345 6789',
   invoiceTemplate: 'modern',
   customInvoiceHtml: '',
   partnerMarqueeEnabled: true,
-  partnerMarqueeDirection: 'left',
+  partnerMarqueeDirection: 'right',
   partnerMarqueeSpeed: 'normal',
   partnerMarqueeLogos: [
     { id: 'pm-1', category: 'ota', name: 'GetYourGuide', logoUrl: 'https://ui-avatars.com/api/?name=GetYourGuide&background=10b981&color=ffffff&size=120&bold=true', subtitle: 'Global OTA Supplier', badgeText: 'Verified', verified: true },
@@ -1326,6 +1507,12 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
     { id: 'pm-4', category: 'ota', name: 'Klook', logoUrl: 'https://ui-avatars.com/api/?name=Klook&background=f97316&color=ffffff&size=120&bold=true', subtitle: 'Asia Activities Partner', badgeText: 'Verified', verified: true },
     { id: 'pm-5', category: 'hotel', name: 'Shangri-La Hotels', logoUrl: 'https://ui-avatars.com/api/?name=Shangri-La&background=991b1b&color=ffffff&size=120&bold=true', subtitle: 'Luxury Hotel Allotment', badgeText: 'Contracted', verified: true },
     { id: 'pm-6', category: 'flight', name: 'Malaysia Airlines', logoUrl: 'https://ui-avatars.com/api/?name=Malaysia+Airlines&background=1e3a8a&color=ffffff&size=120&bold=true', subtitle: 'Official Aviation Partner', badgeText: 'Aviation', verified: true }
-  ]
+  ],
+  fxMarkupInr: 1,
+  fxMarkupPercent: 0,
+  fxIntlMarkupPercent: 2,
+  fxRefreshSeconds: 120,
+  fxUseManualRate: false,
+  fxManualRateOverride: 20.65
 };
 

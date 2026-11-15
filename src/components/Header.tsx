@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Menu, X, Briefcase, Users, LogOut, ChevronRight } from 'lucide-react';
+import { Menu, X, Briefcase, Users, LogOut, ChevronRight, Globe } from 'lucide-react';
 import { Agent } from '../types';
+import { useCurrencyRate, SUPPORTED_CURRENCIES } from '../lib/currency';
+import { HOME_SECTIONS } from '../lib/homeSections';
 
 interface HeaderProps {
   onRequestLogin?: (role: 'customer' | 'agent') => void;
@@ -26,6 +28,8 @@ export default function Header({
   onRequestLogin
 }: HeaderProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { currency, geoInfo } = useCurrencyRate();
+  const activeCurrencyMeta = SUPPORTED_CURRENCIES[currency] || SUPPORTED_CURRENCIES.INR;
 
   const handleNavClick = (path: string, params?: any) => {
     onNavigate(path, params);
@@ -95,13 +99,13 @@ export default function Header({
   }, []);
 
   return (
-    <header className="fixed w-full top-0 z-50 bg-white/95 backdrop-blur-xl border-b border-transparent">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-4 md:gap-8 h-16 md:h-20">
-          {/* Zone 1: Brand Wordmark & Official Logo (Edge-to-Edge display) */}
+    <header className="fixed w-full max-w-[100vw] overflow-x-clip top-0 z-50 bg-white/95 backdrop-blur-xl border-b border-transparent">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between gap-2 sm:gap-4 md:gap-8 h-16 md:h-20">
+          {/* Zone 1: Brand Wordmark & Official Logo (Responsive mobile fit) */}
           <div
             onClick={() => handleNavClick('/')}
-            className="flex items-center gap-3 cursor-pointer group shrink-0 select-none py-1"
+            className="flex items-center gap-2 sm:gap-3 cursor-pointer group min-w-0 flex-1 md:flex-initial select-none py-1"
           >
             <img
               src={logoSettings.url}
@@ -114,45 +118,68 @@ export default function Header({
               alt="GFK Holidays Logo"
               referrerPolicy="no-referrer"
               style={{
-                height: `${logoSettings.height}px`,
-                maxHeight: '72px'
+                height: `${logoSettings.height}px`
               }}
-              className="w-auto max-w-[240px] sm:max-w-[320px] object-contain shrink-0 transition-transform duration-200 group-hover:scale-102 bg-transparent"
+              className="w-auto max-h-9 sm:max-h-14 md:max-h-[72px] max-w-[100px] sm:max-w-[220px] md:max-w-[320px] object-contain shrink-0 transition-transform duration-200 group-hover:scale-102 bg-transparent"
             />
             {logoSettings.showBrandText && (
-              <span className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight text-zinc-950 group-hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0">
+              <span className="text-base sm:text-2xl md:text-3xl font-black tracking-tight text-zinc-950 group-hover:text-emerald-700 transition-colors truncate min-w-0">
                 GFK Holidays
               </span>
             )}
           </div>
 
-          {/* Zone 2: 5 Concise Single-Line Navigation Links */}
+          {/* Zone 2: Concise Single-Line Navigation Links (Smooth-Scrolls to Home Sections) */}
           <nav className="hidden md:flex items-center gap-7 text-sm font-semibold text-zinc-600">
-            <button
-              onClick={() => handleNavClick('/search', { category: 'Packages' })}
+            <a
+              href={`/#${HOME_SECTIONS.packages}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.packages}`);
+              }}
               className="hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Malaysia Packages
-            </button>
-            <button
-              onClick={() => handleNavClick('/tickets')}
+            </a>
+            <a
+              href={`/#${HOME_SECTIONS.tickets}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.tickets}`);
+              }}
               className="hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Attraction Tickets
-            </button>
-            <button
-              onClick={() => handleNavClick('/hotels')}
+            </a>
+            <a
+              href={`/#${HOME_SECTIONS.hotels}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.hotels}`);
+              }}
               className="hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Contracted Hotels
-            </button>
+            </a>
             <button
+              type="button"
               onClick={() => handleNavClick('/transport')}
               className="hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Private Transfers
             </button>
+            <a
+              href={`/#${HOME_SECTIONS.flights}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.flights}`);
+              }}
+              className="hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Available Flights
+            </a>
             <button
+              type="button"
               onClick={() => handleNavClick('/ctfu-builder')}
               className="hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
@@ -160,8 +187,18 @@ export default function Header({
             </button>
           </nav>
 
-          {/* Zone 3: Primary Action */}
-          <div className="hidden md:flex items-center gap-3 shrink-0">
+          {/* Zone 3: Auto-Detected Regional Currency Indicator + Primary Action */}
+          <div className="hidden md:flex items-center gap-2.5 shrink-0">
+            <div
+              className="flex items-center gap-1.5 bg-zinc-100 border border-zinc-200 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold text-zinc-800 whitespace-nowrap"
+              title={`Prices automatically localized for ${geoInfo.countryName || geoInfo.countryCode}`}
+            >
+              <Globe className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span>{geoInfo.countryCode || 'IN'}</span>
+              <span className="text-zinc-300">·</span>
+              <span>{activeCurrencyMeta.symbol.trim()} {currency}</span>
+            </div>
+
             {userRole === 'guest' && (
               <button
                 onClick={() => (onRequestLogin ? onRequestLogin('customer') : onLoginAs('customer'))}
@@ -207,8 +244,16 @@ export default function Header({
             )}
           </div>
 
-          {/* Mobile Right Action & Menu Button */}
-          <div className="flex items-center gap-2 md:hidden">
+          {/* Mobile Right Regional Currency + Action & Menu Button */}
+          <div className="flex items-center gap-1 sm:gap-1.5 md:hidden shrink-0">
+            <span
+              className="px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-900 text-[10px] sm:text-[11px] font-extrabold whitespace-nowrap inline-flex items-center gap-1"
+              title={`Region: ${geoInfo.countryName || geoInfo.countryCode}`}
+            >
+              <span>{geoInfo.countryCode || 'IN'}</span>
+              <span className="text-zinc-300">·</span>
+              <span>{activeCurrencyMeta.symbol.trim()} {currency}</span>
+            </span>
             {userRole === 'guest' ? (
               <button
                 type="button"
@@ -243,29 +288,58 @@ export default function Header({
             >
               Home — Explore Malaysia
             </button>
-            <button
-              onClick={() => handleNavClick('/search', { category: 'Packages' })}
+            <a
+              href={`/#${HOME_SECTIONS.packages}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.packages}`);
+              }}
               className="block w-full text-left font-bold text-sm p-3 rounded-xl hover:bg-zinc-50 text-zinc-900"
             >
               Malaysia Tour Packages
-            </button>
-            <button
-              onClick={() => handleNavClick('/tickets')}
+            </a>
+            <a
+              href={`/#${HOME_SECTIONS.tickets}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.tickets}`);
+              }}
               className="block w-full text-left font-bold text-sm p-3 rounded-xl hover:bg-zinc-50 text-zinc-900"
             >
-              Attraction Tickets & Passes
-            </button>
-            <button
-              onClick={() => handleNavClick('/hotels')}
+              Attraction Tickets &amp; Passes
+            </a>
+            <a
+              href={`/#${HOME_SECTIONS.hotels}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.hotels}`);
+              }}
               className="block w-full text-left font-bold text-sm p-3 rounded-xl hover:bg-zinc-50 text-zinc-900"
             >
               Contracted Hotels Directory
-            </button>
+            </a>
             <button
+              type="button"
               onClick={() => handleNavClick('/transport')}
               className="block w-full text-left font-bold text-sm p-3 rounded-xl hover:bg-zinc-50 text-zinc-900"
             >
-              Private Transfers & Fleet
+              Private Transfers &amp; Fleet
+            </button>
+            <a
+              href={`/#${HOME_SECTIONS.flights}`}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(`/#${HOME_SECTIONS.flights}`);
+              }}
+              className="block w-full text-left font-bold text-sm p-3 rounded-xl hover:bg-zinc-50 text-zinc-900"
+            >
+              Available Flights &amp; Status
+            </a>
+            <button
+              onClick={() => handleNavClick('/marketplaces')}
+              className="block w-full text-left font-bold text-sm p-3 rounded-xl hover:bg-zinc-50 text-emerald-800"
+            >
+              Marketplace Booking (Viator · TripAdvisor · GYG)
             </button>
             <button
               onClick={() => handleNavClick('/ctfu-builder')}

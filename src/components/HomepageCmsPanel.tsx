@@ -18,6 +18,8 @@ import {
   SocialMediaChannel,
   OtaPartner,
   PartnerLogoItem,
+  AvailableFlight,
+  PackagePoster,
   GlobalSettings
 } from '../types';
 import {
@@ -26,6 +28,8 @@ import {
   DEFAULT_OTA_PARTNERS,
   DEFAULT_HOTEL_PARTNER_LOGOS,
   DEFAULT_FLIGHT_PARTNER_LOGOS,
+  DEFAULT_AVAILABLE_FLIGHTS,
+  DEFAULT_PACKAGE_POSTERS,
   DEFAULT_SEO_KEYWORDS,
   DEFAULT_GLOBAL_SETTINGS
 } from '../data';
@@ -50,7 +54,8 @@ import {
   EyeOff,
   CheckCircle2,
   AlertCircle,
-  Sliders
+  Sliders,
+  Tag
 } from 'lucide-react';
 import LogoQuickUploader from './LogoQuickUploader';
 import VideoUploaderWithProgress from './VideoUploaderWithProgress';
@@ -141,6 +146,12 @@ export default function HomepageCmsPanel({
     flightPartnerLogos: Array.isArray(g?.flightPartnerLogos)
       ? g.flightPartnerLogos
       : DEFAULT_FLIGHT_PARTNER_LOGOS,
+    availableFlights: Array.isArray(g?.availableFlights)
+      ? g.availableFlights
+      : DEFAULT_AVAILABLE_FLIGHTS,
+    packagePosters: Array.isArray(g?.packagePosters)
+      ? g.packagePosters
+      : DEFAULT_PACKAGE_POSTERS,
     partnerReelStyle: g?.partnerReelStyle || DEFAULT_GLOBAL_SETTINGS.partnerReelStyle || 'live-video-sequence',
     partnerReelStageDuration:
       g?.partnerReelStageDuration !== undefined
@@ -171,12 +182,14 @@ export default function HomepageCmsPanel({
   const [activeSubTab, setActiveSubTab] = useState<
     | 'logo_brand'
     | 'hero_video'
-    | 'featured_video'
     | 'hero_copy'
     | 'partner_marquee'
     | 'customer_media'
     | 'social_media'
     | 'seo'
+    | 'flights_cms'
+    | 'posters_cms'
+    | 'marketplace_cms'
   >('logo_brand');
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'quota_warning' | 'error'>('saved');
@@ -501,6 +514,37 @@ export default function HomepageCmsPanel({
     subtitle: 'Verified Alliance Partner',
     badgeText: 'Verified',
     accentColor: '#10b981'
+  });
+
+  // New Available Flight state
+  const [newFlight, setNewFlight] = useState<Partial<AvailableFlight>>({
+    airline: 'AirAsia',
+    flightNumber: '',
+    originCode: 'KUL',
+    originCity: 'Kuala Lumpur (KLIA2)',
+    destinationCode: 'LGK',
+    destinationCity: 'Langkawi',
+    departureDate: '2026-12-10',
+    departureTime: '09:30',
+    arrivalTime: '10:35',
+    tripTitle: '',
+    status: 'ON TIME',
+    seatsAvailable: 12,
+    farePerPax: 199,
+    cabinClass: 'Economy',
+    baggage: '20kg Checked'
+  });
+
+  // New Ongoing Package Poster state
+  const [newPoster, setNewPoster] = useState<Partial<PackagePoster>>({
+    title: '',
+    subtitle: '',
+    badge: 'ONGOING CAMPAIGN',
+    tag: 'Direct Package',
+    imageUrl: '',
+    destination: 'Langkawi, Malaysia',
+    priceLabel: 'From RM 899',
+    validUntil: 'Limited Allocation'
   });
 
   // Helper to convert uploaded image or video file to Data URL
@@ -853,16 +897,19 @@ service firebase.storage {
         )}
       </div>
 
-      {/* Sub-Navigation Tabs: 7 Unified, Dedicated Sections */}
+      {/* Sub-Navigation Tabs: 9 Unified, Dedicated Sections */}
       <div className="flex flex-wrap items-center gap-2 bg-zinc-100 p-1.5 rounded-2xl border border-zinc-200">
         {[
           { id: 'logo_brand', label: '1. Brand Logo & Header', icon: ImageIcon },
           { id: 'hero_video', label: '2. Hero & Featured Video', icon: Video },
           { id: 'hero_copy', label: '3. Hero Headlines & Content', icon: Sliders },
-          { id: 'partner_marquee', label: '4. Airline & Hotel Partners', icon: Award },
-          { id: 'customer_media', label: '5. Customer Photos & Stories', icon: Camera },
+          { id: 'partner_marquee', label: '4. Partner Preview Ticker', icon: Award },
+          { id: 'customer_media', label: '5. Recent Trips & Reviews', icon: Camera },
           { id: 'social_media', label: '6. Social Media Presence', icon: Share2 },
-          { id: 'seo', label: '7. SEO & Trending Keywords', icon: Globe }
+          { id: 'seo', label: '7. SEO & Trending Keywords', icon: Globe },
+          { id: 'flights_cms', label: '8. Available Flights & Status', icon: Plane },
+          { id: 'posters_cms', label: '9. Ongoing Posters', icon: Tag },
+          { id: 'marketplace_cms', label: '10. Viator & TripAdvisor Portals', icon: Globe }
         ].map((tab) => {
           const IconComp = tab.icon;
           return (
@@ -972,7 +1019,8 @@ service firebase.storage {
                   heroVideoUrl: persistentUrl,
                   featuredVideoEmbedUrl: persistentUrl,
                   heroVideoSource: sourceMode,
-                  heroVideoFileName: fileName
+                  heroVideoFileName: fileName,
+                  ...(meta?.posterDataUrl ? { heroFallbackImage: meta.posterDataUrl } : {})
                 };
                 setFormState(updated);
                 formStateRef.current = updated;
@@ -986,7 +1034,8 @@ service firebase.storage {
                     heroVideoUrl: persistentUrl,
                     featuredVideoEmbedUrl: persistentUrl,
                     heroVideoSource: sourceMode,
-                    heroVideoFileName: fileName
+                    heroVideoFileName: fileName,
+                    ...(meta?.posterDataUrl ? { heroFallbackImage: meta.posterDataUrl } : {})
                   },
                   sourceMode === 'upload'
                     ? `Uploaded video "${fileName || 'file'}" synced to Firebase across Phones, Netlify & AI Studio!`
@@ -3034,6 +3083,745 @@ service firebase.storage {
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SUB-TAB 8: AVAILABLE FLIGHTS & UPCOMING TRIP STATUS MANAGER
+      ===================================================================== */}
+      {activeSubTab === 'flights_cms' && (
+        <div className="bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm space-y-6 max-w-6xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-100 pb-4">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-widest text-sky-800 bg-sky-50 px-2.5 py-1 rounded border border-sky-200">
+                FIXED OPERATOR INVENTORY · NO FARE SEARCH
+              </span>
+              <h3 className="text-base font-black text-zinc-950 mt-2">
+                Upcoming Trips — Available Flights &amp; Live Status ({(formState.availableFlights || []).length} Flights)
+              </h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Post flights available directly with GFK Holidays and update live departure status (`ON TIME`, `LIMITED SEATS`, `BOARDING`, `DELAYED`, `DEPARTED`) for mobile &amp; desktop users.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => saveToFirebase(undefined, 'Available flights & status saved to Firebase!')}
+              className="bg-sky-700 hover:bg-sky-800 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <Check className="w-3.5 h-3.5" /> Save Flights to Firebase
+            </button>
+          </div>
+
+          {/* Add New Available Flight */}
+          <div className="bg-sky-50/40 border border-sky-200 rounded-2xl p-4 space-y-3">
+            <h4 className="text-xs font-black text-zinc-900">Post New Available Flight Allotment</h4>
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Airline</label>
+                <input
+                  type="text"
+                  value={newFlight.airline || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, airline: e.target.value })}
+                  placeholder="Malaysia Airlines"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Flight Code</label>
+                <input
+                  type="text"
+                  value={newFlight.flightNumber || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, flightNumber: e.target.value.toUpperCase() })}
+                  placeholder="MH 1432"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Origin Airport</label>
+                <input
+                  type="text"
+                  value={newFlight.originCode || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, originCode: e.target.value.toUpperCase() })}
+                  placeholder="KUL"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Destination Code</label>
+                <input
+                  type="text"
+                  value={newFlight.destinationCode || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, destinationCode: e.target.value.toUpperCase() })}
+                  placeholder="LGK"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Destination City</label>
+                <input
+                  type="text"
+                  value={newFlight.destinationCity || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, destinationCity: e.target.value })}
+                  placeholder="Langkawi"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Departure Date</label>
+                <input
+                  type="date"
+                  value={newFlight.departureDate || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, departureDate: e.target.value })}
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Dep Time</label>
+                <input
+                  type="text"
+                  value={newFlight.departureTime || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, departureTime: e.target.value })}
+                  placeholder="09:30"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Arr Time</label>
+                <input
+                  type="text"
+                  value={newFlight.arrivalTime || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, arrivalTime: e.target.value })}
+                  placeholder="10:35"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Status</label>
+                <select
+                  value={newFlight.status || 'ON TIME'}
+                  onChange={(e) => setNewFlight({ ...newFlight, status: e.target.value as any })}
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                >
+                  <option value="ON TIME">ON TIME</option>
+                  <option value="SCHEDULED">SCHEDULED</option>
+                  <option value="LIMITED SEATS">LIMITED SEATS</option>
+                  <option value="BOARDING">BOARDING</option>
+                  <option value="DELAYED">DELAYED</option>
+                  <option value="DEPARTED">DEPARTED</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Seats Left</label>
+                <input
+                  type="number"
+                  value={newFlight.seatsAvailable ?? 10}
+                  onChange={(e) => setNewFlight({ ...newFlight, seatsAvailable: Number(e.target.value) })}
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Fixed Fare (RM)</label>
+                <input
+                  type="number"
+                  value={newFlight.farePerPax ?? 199}
+                  onChange={(e) => setNewFlight({ ...newFlight, farePerPax: Number(e.target.value) })}
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Baggage</label>
+                <input
+                  type="text"
+                  value={newFlight.baggage || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, baggage: e.target.value })}
+                  placeholder="20kg Checked"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+              <div className="sm:col-span-9">
+                <label className="block text-[10px] font-bold text-zinc-600 mb-1">Linked Upcoming Trip / Tour Name</label>
+                <input
+                  type="text"
+                  value={newFlight.tripTitle || ''}
+                  onChange={(e) => setNewFlight({ ...newFlight, tripTitle: e.target.value })}
+                  placeholder="e.g. Langkawi Luxury Overwater Escape Departure"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-xl text-xs font-semibold text-zinc-900"
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newFlight.flightNumber || !newFlight.airline) {
+                      showToast('Please enter Airline and Flight Code.');
+                      return;
+                    }
+                    const item: AvailableFlight = {
+                      id: `fl-${Date.now()}`,
+                      airline: newFlight.airline || 'Malaysia Airlines',
+                      flightNumber: newFlight.flightNumber || 'MH 100',
+                      originCode: newFlight.originCode || 'KUL',
+                      originCity: newFlight.originCity || 'Kuala Lumpur',
+                      destinationCode: newFlight.destinationCode || 'LGK',
+                      destinationCity: newFlight.destinationCity || 'Langkawi',
+                      departureDate: newFlight.departureDate || '2026-12-10',
+                      departureTime: newFlight.departureTime || '09:30',
+                      arrivalTime: newFlight.arrivalTime || '10:35',
+                      tripTitle: newFlight.tripTitle || '',
+                      status: (newFlight.status as AvailableFlight['status']) || 'ON TIME',
+                      seatsAvailable: Number(newFlight.seatsAvailable ?? 10),
+                      farePerPax: Number(newFlight.farePerPax ?? 199),
+                      cabinClass: newFlight.cabinClass || 'Economy',
+                      baggage: newFlight.baggage || '20kg Checked'
+                    };
+                    const updated = [...(formStateRef.current.availableFlights || []), item];
+                    saveToFirebase({ availableFlights: updated }, `Posted ${item.airline} ${item.flightNumber} & saved!`);
+                    setNewFlight({ ...newFlight, flightNumber: '', tripTitle: '' });
+                  }}
+                  className="w-full bg-zinc-950 hover:bg-zinc-800 text-white p-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" /> Post Flight
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Existing Flights Quick Status & Seats Editor */}
+          <div className="space-y-2.5">
+            {(formState.availableFlights || []).map((fl, idx) => (
+              <div
+                key={fl.id}
+                className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-center p-3.5 bg-zinc-50 rounded-2xl border border-zinc-200"
+              >
+                <div className="md:col-span-3">
+                  <div className="text-xs font-black text-zinc-950">
+                    {fl.airline} · <span className="font-mono text-sky-700">{fl.flightNumber}</span>
+                  </div>
+                  <div className="text-[11px] font-semibold text-zinc-500">
+                    {fl.originCode} → {fl.destinationCode} ({fl.departureDate})
+                  </div>
+                </div>
+
+                <input
+                  type="text"
+                  value={fl.tripTitle || ''}
+                  onChange={(e) => {
+                    const list = [...(formStateRef.current.availableFlights || [])];
+                    list[idx] = { ...list[idx], tripTitle: e.target.value };
+                    updateFieldWithAutoSave({ availableFlights: list });
+                  }}
+                  placeholder="Linked Upcoming Trip"
+                  className="md:col-span-3 bg-white border border-zinc-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-zinc-900"
+                />
+
+                <select
+                  value={fl.status}
+                  onChange={(e) => {
+                    const list = [...(formStateRef.current.availableFlights || [])];
+                    list[idx] = { ...list[idx], status: e.target.value as AvailableFlight['status'] };
+                    saveToFirebase({ availableFlights: list }, `${fl.flightNumber} status updated to ${e.target.value}!`);
+                  }}
+                  className="md:col-span-2 bg-white border border-zinc-300 rounded-xl px-2.5 py-1.5 text-xs font-black text-zinc-900"
+                >
+                  <option value="ON TIME">ON TIME</option>
+                  <option value="SCHEDULED">SCHEDULED</option>
+                  <option value="LIMITED SEATS">LIMITED SEATS</option>
+                  <option value="BOARDING">BOARDING</option>
+                  <option value="DELAYED">DELAYED</option>
+                  <option value="DEPARTED">DEPARTED</option>
+                </select>
+
+                <div className="md:col-span-2 flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    value={fl.seatsAvailable}
+                    onChange={(e) => {
+                      const list = [...(formStateRef.current.availableFlights || [])];
+                      list[idx] = { ...list[idx], seatsAvailable: Number(e.target.value) };
+                      updateFieldWithAutoSave({ availableFlights: list });
+                    }}
+                    className="w-16 bg-white border border-zinc-200 rounded-xl px-2 py-1.5 text-xs font-bold text-zinc-900"
+                    title="Seats Left"
+                  />
+                  <span className="text-[10px] font-bold text-zinc-500">seats</span>
+                </div>
+
+                <div className="md:col-span-1 flex items-center gap-1">
+                  <span className="text-[10px] font-bold text-zinc-500">RM</span>
+                  <input
+                    type="number"
+                    value={fl.farePerPax}
+                    onChange={(e) => {
+                      const list = [...(formStateRef.current.availableFlights || [])];
+                      list[idx] = { ...list[idx], farePerPax: Number(e.target.value) };
+                      updateFieldWithAutoSave({ availableFlights: list });
+                    }}
+                    className="w-full bg-white border border-zinc-200 rounded-xl px-2 py-1.5 text-xs font-bold text-zinc-900"
+                  />
+                </div>
+
+                <div className="md:col-span-1 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const list = (formStateRef.current.availableFlights || []).filter((_, i) => i !== idx);
+                      saveToFirebase({ availableFlights: list }, `Removed flight ${fl.flightNumber}!`);
+                    }}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer"
+                    title="Delete Flight"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SUB-TAB 9: ONGOING PACKAGE POSTERS MANAGER
+      ===================================================================== */}
+      {activeSubTab === 'posters_cms' && (
+        <div className="bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm space-y-6 max-w-5xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-100 pb-4">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-widest text-amber-800 bg-amber-50 px-2.5 py-1 rounded border border-amber-200">
+                MOBILE SCROLL-DOWN CAMPAIGN POSTERS
+              </span>
+              <h3 className="text-base font-black text-zinc-950 mt-2">
+                Ongoing Package Posters &amp; Active Campaigns ({(formState.packagePosters || []).length} Posters)
+              </h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Upload campaign poster graphics shown in the Ongoing Package Posters section when customers scroll down on mobile.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => saveToFirebase(undefined, 'Ongoing package posters saved to Firebase!')}
+              className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <Check className="w-3.5 h-3.5" /> Save Posters to Firebase
+            </button>
+          </div>
+
+          {/* Add New Poster */}
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end bg-amber-50/40 p-4 rounded-2xl border border-amber-200">
+            <div className="sm:col-span-3">
+              <label className="block text-[11px] font-bold text-zinc-700 mb-1">Poster Title</label>
+              <input
+                type="text"
+                value={newPoster.title || ''}
+                onChange={(e) => setNewPoster({ ...newPoster, title: e.target.value })}
+                placeholder="Langkawi Year-End Sale"
+                className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+              />
+            </div>
+            <div className="sm:col-span-3">
+              <label className="block text-[11px] font-bold text-zinc-700 mb-1">Subtitle / Offer</label>
+              <input
+                type="text"
+                value={newPoster.subtitle || ''}
+                onChange={(e) => setNewPoster({ ...newPoster, subtitle: e.target.value })}
+                placeholder="Includes Sunset Yacht & SkyCab"
+                className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl text-xs text-zinc-800"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-bold text-zinc-700 mb-1">Price Label</label>
+              <input
+                type="text"
+                value={newPoster.priceLabel || ''}
+                onChange={(e) => setNewPoster({ ...newPoster, priceLabel: e.target.value })}
+                placeholder="From RM 1,899"
+                className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl text-xs font-bold text-zinc-900"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-bold text-zinc-700 mb-1">Poster Photo</label>
+              <label className="w-full flex items-center justify-center gap-1.5 p-2.5 bg-white border border-dashed border-amber-400 hover:border-amber-600 rounded-xl text-xs font-bold text-amber-800 cursor-pointer">
+                <Upload className="w-3.5 h-3.5" />
+                <span className="truncate">{newPoster.imageUrl ? 'Photo Ready' : 'Upload'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) =>
+                    handleFileUpload(e, (dataUrl, cleanName) => {
+                      setNewPoster((prev) => ({
+                        ...prev,
+                        title: prev.title || cleanName,
+                        imageUrl: dataUrl
+                      }));
+                      showToast('Poster image ready! Click "+ Add Poster".');
+                    }, 900)
+                  }
+                />
+              </label>
+            </div>
+            <div className="sm:col-span-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!newPoster.title && !newPoster.imageUrl) {
+                    showToast('Please enter a Poster Title or upload a poster photo.');
+                    return;
+                  }
+                  const poster: PackagePoster = {
+                    id: `pp-${Date.now()}`,
+                    title: newPoster.title || 'Malaysia Featured Campaign',
+                    subtitle: newPoster.subtitle || 'Direct local operator package offer',
+                    badge: newPoster.badge || 'ONGOING CAMPAIGN',
+                    tag: newPoster.tag || 'Direct Package',
+                    imageUrl:
+                      newPoster.imageUrl ||
+                      'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=900&q=80',
+                    destination: newPoster.destination || 'Malaysia',
+                    priceLabel: newPoster.priceLabel || 'From RM 899',
+                    validUntil: newPoster.validUntil || 'Limited Allocation'
+                  };
+                  const updated = [...(formStateRef.current.packagePosters || []), poster];
+                  saveToFirebase({ packagePosters: updated }, `Added poster "${poster.title}"!`);
+                  setNewPoster({
+                    title: '',
+                    subtitle: '',
+                    badge: 'ONGOING CAMPAIGN',
+                    tag: 'Direct Package',
+                    imageUrl: '',
+                    destination: 'Langkawi, Malaysia',
+                    priceLabel: 'From RM 899'
+                  });
+                }}
+                className="w-full bg-zinc-950 hover:bg-zinc-800 text-white p-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Add Poster
+              </button>
+            </div>
+          </div>
+
+          {/* Existing Posters */}
+          <div className="space-y-3">
+            {(formState.packagePosters || []).map((poster, idx) => (
+              <div
+                key={poster.id}
+                className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center p-3.5 bg-zinc-50 rounded-2xl border border-zinc-200"
+              >
+                <div className="md:col-span-2 flex items-center gap-2">
+                  <div className="w-16 h-12 rounded-xl bg-zinc-900 overflow-hidden shrink-0 border border-zinc-300">
+                    <img src={poster.imageUrl} alt={poster.title} className="w-full h-full object-cover" />
+                  </div>
+                  <label className="px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 text-[11px] font-bold text-amber-800 cursor-pointer">
+                    <span>Photo</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) =>
+                        handleFileUpload(e, (dataUrl) => {
+                          const list = [...(formStateRef.current.packagePosters || [])];
+                          list[idx] = { ...list[idx], imageUrl: dataUrl };
+                          saveToFirebase({ packagePosters: list }, `Updated poster image for "${poster.title}"!`);
+                        }, 900)
+                      }
+                    />
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  value={poster.title}
+                  onChange={(e) => {
+                    const list = [...(formStateRef.current.packagePosters || [])];
+                    list[idx] = { ...list[idx], title: e.target.value };
+                    updateFieldWithAutoSave({ packagePosters: list });
+                  }}
+                  className="md:col-span-3 bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-black text-zinc-900"
+                  placeholder="Poster Title"
+                />
+                <input
+                  type="text"
+                  value={poster.subtitle}
+                  onChange={(e) => {
+                    const list = [...(formStateRef.current.packagePosters || [])];
+                    list[idx] = { ...list[idx], subtitle: e.target.value };
+                    updateFieldWithAutoSave({ packagePosters: list });
+                  }}
+                  className="md:col-span-4 bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs text-zinc-700"
+                  placeholder="Offer Description"
+                />
+                <input
+                  type="text"
+                  value={poster.priceLabel}
+                  onChange={(e) => {
+                    const list = [...(formStateRef.current.packagePosters || [])];
+                    list[idx] = { ...list[idx], priceLabel: e.target.value };
+                    updateFieldWithAutoSave({ packagePosters: list });
+                  }}
+                  className="md:col-span-2 bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-emerald-700"
+                  placeholder="Price Label"
+                />
+                <div className="md:col-span-1 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const list = (formStateRef.current.packagePosters || []).filter((_, i) => i !== idx);
+                      saveToFirebase({ packagePosters: list }, `Removed poster "${poster.title}"!`);
+                    }}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer"
+                    title="Delete Poster"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SUB-TAB 10: VIATOR, TRIPADVISOR & MARKETPLACE PORTALS CMS
+      ===================================================================== */}
+      {activeSubTab === 'marketplace_cms' && (
+        <div className="bg-white border border-zinc-200 rounded-3xl p-6 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-100 pb-4">
+            <div>
+              <h3 className="text-lg font-black text-zinc-950">
+                Viator, TripAdvisor &amp; Official Marketplace Portals
+              </h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Configure your Viator, TripAdvisor, GetYourGuide, and Klook booking URLs, conversion perks, and marketplace section headline.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const newPartner: OtaPartner = {
+                    id: `ota-${Date.now()}`,
+                    name: 'New Marketplace Portal',
+                    roleBadge: 'Verified Official Partner',
+                    description: 'Book our Malaysia tours with traveler protection and flexible cancellation.',
+                    rating: '4.9 / 5.0',
+                    reviewsCount: '1,200+ Reviews',
+                    accentColor: '#00AA6C',
+                    url: 'https://www.viator.com',
+                    verified: true,
+                    ctaLabel: 'Book via Portal',
+                    perks: ['Reserve Now & Pay Later', 'Free 24h Cancellation']
+                  };
+                  const list = [newPartner, ...(formStateRef.current.otaPartners || [])];
+                  saveToFirebase({ otaPartners: list }, 'Added Marketplace Portal!');
+                }}
+                className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Marketplace Portal
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  saveToFirebase(
+                    {
+                      otaPartners: DEFAULT_OTA_PARTNERS,
+                      otaSectionTitle: 'Book via Viator & TripAdvisor or Reserve Direct',
+                      otaSectionSubtitle:
+                        'Prefer global traveler protection, Reserve Now & Pay Later, or free 24-hour cancellation? Book our licensed Malaysia tours seamlessly through Viator and TripAdvisor—or lock direct operator rates below.'
+                    },
+                    'Restored default Viator & TripAdvisor Marketplace portals!'
+                  )
+                }
+                className="bg-zinc-100 hover:bg-zinc-200 text-zinc-700 px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Reset Defaults
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
+            <div>
+              <label className="text-[11px] font-bold text-zinc-600 block mb-1">
+                Marketplace Section Headline
+              </label>
+              <input
+                type="text"
+                value={formState.otaSectionTitle || ''}
+                onChange={(e) => updateFieldWithAutoSave({ otaSectionTitle: e.target.value })}
+                className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-zinc-900"
+                placeholder="Book via Viator & TripAdvisor or Reserve Direct"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-zinc-600 block mb-1">
+                Marketplace Section Subtitle
+              </label>
+              <input
+                type="text"
+                value={formState.otaSectionSubtitle || ''}
+                onChange={(e) => updateFieldWithAutoSave({ otaSectionSubtitle: e.target.value })}
+                className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs text-zinc-800"
+                placeholder="Reserve now & pay later, free 24h cancellation..."
+              />
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {(formState.otaPartners || DEFAULT_OTA_PARTNERS).map((partner, idx) => (
+              <div
+                key={partner.id}
+                className="bg-zinc-50 border border-zinc-200 rounded-2xl p-4 space-y-3"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                  <div className="md:col-span-3">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      Portal Name
+                    </label>
+                    <input
+                      type="text"
+                      value={partner.name}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = { ...list[idx], name: e.target.value };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-black text-zinc-900"
+                    />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      Role Badge
+                    </label>
+                    <input
+                      type="text"
+                      value={partner.roleBadge}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = { ...list[idx], roleBadge: e.target.value };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-800"
+                    />
+                  </div>
+                  <div className="md:col-span-4">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      Booking Portal URL
+                    </label>
+                    <input
+                      type="text"
+                      value={partner.url || ''}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = { ...list[idx], url: e.target.value };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-semibold text-emerald-700"
+                      placeholder="https://www.viator.com/..."
+                    />
+                  </div>
+                  <div className="md:col-span-2 flex items-end justify-end gap-2 pt-4">
+                    <label className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(partner.verified)}
+                        onChange={(e) => {
+                          const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                          list[idx] = { ...list[idx], verified: e.target.checked };
+                          saveToFirebase({ otaPartners: list }, `Updated verified badge for ${partner.name}`);
+                        }}
+                        className="accent-emerald-600"
+                      />
+                      Verified
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const list = (formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS).filter(
+                          (_, i) => i !== idx
+                        );
+                        saveToFirebase({ otaPartners: list }, `Removed ${partner.name}`);
+                      }}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer"
+                      title="Delete Portal"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      CTA Button Label
+                    </label>
+                    <input
+                      type="text"
+                      value={partner.ctaLabel || ''}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = { ...list[idx], ctaLabel: e.target.value };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      placeholder={`Book on ${partner.name}`}
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-zinc-900"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      Rating / Reviews
+                    </label>
+                    <input
+                      type="text"
+                      value={partner.rating}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = { ...list[idx], rating: e.target.value };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-amber-700"
+                    />
+                  </div>
+                  <div className="md:col-span-4">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      Traveler Perks (Comma Separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={(partner.perks || []).join(', ')}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = {
+                          ...list[idx],
+                          perks: e.target.value
+                            .split(',')
+                            .map((s) => s.trim())
+                            .filter(Boolean)
+                        };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      placeholder="Reserve Now & Pay Later, Free 24h Cancellation"
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs text-zinc-800"
+                    />
+                  </div>
+                  <div className="md:col-span-4">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                      Description
+                    </label>
+                    <input
+                      type="text"
+                      value={partner.description}
+                      onChange={(e) => {
+                        const list = [...(formStateRef.current.otaPartners || DEFAULT_OTA_PARTNERS)];
+                        list[idx] = { ...list[idx], description: e.target.value };
+                        updateFieldWithAutoSave({ otaPartners: list });
+                      }}
+                      className="w-full bg-white border border-zinc-200 rounded-xl px-3 py-2 text-xs text-zinc-700"
+                    />
+                  </div>
                 </div>
               </div>
             ))}

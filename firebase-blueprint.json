@@ -25,7 +25,10 @@
         "itinerary": { "type": "array" },
         "inclusions": { "type": "array", "items": { "type": "string" } },
         "exclusions": { "type": "array", "items": { "type": "string" } },
-        "options": { "type": "array" }
+        "options": { "type": "array" },
+        "trending": { "type": "boolean" },
+        "viatorUrl": { "type": "string" },
+        "tripadvisorUrl": { "type": "string" }
       },
       "required": ["id", "title", "destination", "duration", "type", "base_price", "image"]
     },
@@ -43,7 +46,10 @@
         "bus": { "type": "number" },
         "image": { "type": "string" },
         "gallery": { "type": "array", "items": { "type": "string" } },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "trending": { "type": "boolean" },
+        "viatorUrl": { "type": "string" },
+        "tripadvisorUrl": { "type": "string" }
       },
       "required": ["id", "name", "car", "van", "mpv", "bus", "image"]
     },
@@ -64,7 +70,10 @@
         "gallery": { "type": "array", "items": { "type": "string" } },
         "description": { "type": "string" },
         "roomCategories": { "type": "array" },
-        "amenities": { "type": "array", "items": { "type": "string" } }
+        "amenities": { "type": "array", "items": { "type": "string" } },
+        "trending": { "type": "boolean" },
+        "viatorUrl": { "type": "string" },
+        "tripadvisorUrl": { "type": "string" }
       },
       "required": ["id", "name", "cat", "price", "image"]
     },
@@ -86,7 +95,10 @@
         "gallery": { "type": "array", "items": { "type": "string" } },
         "description": { "type": "string" },
         "ticketCategories": { "type": "array" },
-        "timeSlots": { "type": "array", "items": { "type": "string" } }
+        "timeSlots": { "type": "array", "items": { "type": "string" } },
+        "trending": { "type": "boolean" },
+        "viatorUrl": { "type": "string" },
+        "tripadvisorUrl": { "type": "string" }
       },
       "required": ["id", "name", "price", "image"]
     },
@@ -120,8 +132,13 @@
         "total": { "type": "number" },
         "commission": { "type": "number" },
         "status": { "type": "string", "enum": ["REQUEST_RECEIVED", "CONFIRMED_AWAITING_PAYMENT", "PAID", "COMPLETED", "CANCELLED"] },
-        "paymentMethod": { "type": "string", "enum": ["credit", "bank_transfer"] },
-        "paymentStatus": { "type": "string", "enum": ["UNPAID", "PENDING_BANK_TRANSFER", "PAID", "CREDIT_CHARGED"] },
+        "paymentMethod": { "type": "string", "enum": ["stripe", "credit", "bank_transfer"] },
+        "paymentStatus": { "type": "string", "enum": ["UNPAID", "PENDING_STRIPE", "PENDING_BANK_TRANSFER", "PAID", "CREDIT_CHARGED"] },
+        "currency": { "type": "string", "enum": ["INR", "MYR", "USD", "SGD", "GBP", "EUR", "AED", "AUD"] },
+        "xeRate": { "type": "number" },
+        "chargedAmount": { "type": "number" },
+        "chargedAmountInr": { "type": "number" },
+        "stripeSessionId": { "type": "string" },
         "createdAt": { "type": "string" },
         "phone": { "type": "string" },
         "email": { "type": "string" }
@@ -198,15 +215,48 @@
         "whatsappNumber": { "type": "string" },
         "invoiceMessage": { "type": "string" },
         "accountsEmail": { "type": "string" },
+        "bookingEmail": { "type": "string" },
+        "flightsEmail": { "type": "string" },
         "bankAccountName": { "type": "string" },
         "bankPartner": { "type": "string" },
         "bankAccountNumber": { "type": "string" },
         "partnerMarqueeEnabled": { "type": "boolean" },
         "partnerMarqueeDirection": { "type": "string", "enum": ["left", "right"] },
         "partnerMarqueeSpeed": { "type": "string", "enum": ["slow", "normal", "fast"] },
-        "partnerMarqueeLogos": { "type": "array" }
+        "partnerMarqueeLogos": { "type": "array" },
+        "availableFlights": { "type": "array" },
+        "packagePosters": { "type": "array" },
+        "fxMarkupInr": { "type": "number" },
+        "fxMarkupPercent": { "type": "number" },
+        "fxIntlMarkupPercent": { "type": "number" },
+        "fxRefreshSeconds": { "type": "number" },
+        "fxUseManualRate": { "type": "boolean" },
+        "fxManualRateOverride": { "type": "number" }
       },
       "required": ["id"]
+    },
+    "FlightInquiry": {
+      "title": "FlightInquiry",
+      "description": "Airline fare quote/code requests and flight inquiries routed to flights@gfkholidays.com",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "airline": { "type": "string" },
+        "flightCode": { "type": "string" },
+        "origin": { "type": "string" },
+        "destination": { "type": "string" },
+        "departureDate": { "type": "string" },
+        "pax": { "type": "number" },
+        "inquiryType": { "type": "string", "enum": ["fare_quote", "schedule_baggage", "group_booking", "general_flight"] },
+        "customerName": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "notes": { "type": "string" },
+        "targetEmail": { "type": "string" },
+        "status": { "type": "string", "enum": ["NEW", "QUOTED", "CLOSED"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "airline", "origin", "destination", "customerName", "customerEmail", "targetEmail", "status", "createdAt"]
     },
     "CmsSnapshot": {
       "title": "CmsSnapshot",
@@ -243,6 +293,7 @@
     "bookings": { "schema": "Booking", "description": "Collection of bookings" },
     "allotments": { "schema": "Allotment", "description": "Collection of inventory allotments" },
     "reviews": { "schema": "Review", "description": "Collection of product reviews" },
+    "flight_inquiries": { "schema": "FlightInquiry", "description": "Collection of flight fare quote/code requests and non-banking flight inquiries" },
     "settings": { "schema": "Setting", "description": "Collection of global settings and homepage CMS" },
     "cms_snapshots": { "schema": "CmsSnapshot", "description": "Atomic collection snapshot mirrors for instant cross-device sync" },
     "cms_video_chunks": { "schema": "CmsVideoChunk", "description": "Chunked fallback video data for cross-device video playback" }

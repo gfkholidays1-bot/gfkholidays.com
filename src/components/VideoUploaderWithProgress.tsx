@@ -30,6 +30,7 @@ import {
   isDirectVideoSource,
   isUploadedVideoUrl,
   isUniversalHttpVideoUrl,
+  migrateCachedVideoToFirebaseStorage,
   DEFAULT_SCENIC_HERO_VIDEO,
   StoredVideoItem,
   StorageAuditResult
@@ -43,6 +44,7 @@ export interface VideoAppliedMetadata {
   sourceMode: 'upload' | 'url';
   fileName?: string;
   serverUrl?: string | null;
+  posterDataUrl?: string | null;
   backend?: 'firebase-storage' | 'firestore-chunks' | 'local';
   errorReason?: string;
 }
@@ -118,6 +120,7 @@ export default function VideoUploaderWithProgress({
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
   const [storageRulesLocked, setStorageRulesLocked] = useState<boolean>(false);
   const [showStorageExplainer, setShowStorageExplainer] = useState<boolean>(false);
+  const [isMigratingCdn, setIsMigratingCdn] = useState<boolean>(false);
 
   // Stored videos list for the library
   const [storedList, setStoredList] = useState<StoredVideoItem[]>([]);
@@ -291,22 +294,23 @@ export default function VideoUploaderWithProgress({
     setUploadStatus(`Uploading ${file.name} (${totalSizeMb} MB) to Firebase Cloud...`);
 
     try {
-      const { playbackUrl, serverUrl, fileName, backend, errorReason } = await saveVideoBlob(
-        storageKey,
-        file,
-        file.name,
-        (percent, loadedMb, totalMb, stageNote) => {
-          setUploadProgress(percent);
-          setFileStats({
-            name: file.name,
-            sizeMb: totalMb,
-            loadedMb
-          });
-          setUploadStatus(
-            `${stageNote || 'Uploading video to Firebase Cloud'}: ${percent}% (${loadedMb} MB of ${totalMb} MB)`
-          );
-        }
-      );
+      const { playbackUrl, serverUrl, fileName, backend, posterDataUrl, errorReason } =
+        await saveVideoBlob(
+          storageKey,
+          file,
+          file.name,
+          (percent, loadedMb, totalMb, stageNote) => {
+            setUploadProgress(percent);
+            setFileStats({
+              name: file.name,
+              sizeMb: totalMb,
+              loadedMb
+            });
+            setUploadStatus(
+              `${stageNote || 'Uploading video to Firebase Cloud'}: ${percent}% (${loadedMb} MB of ${totalMb} MB)`
+            );
+          }
+        );
 
       setUploadProgress(100);
       setActiveSourceMode('upload');
@@ -324,13 +328,13 @@ export default function VideoUploaderWithProgress({
 
       if (backend === 'firebase-storage') {
         setUploadStatus(
-          `Uploaded "${fileName}" (100%) to Firebase Storage CDN! Live on Phones, Netlify & AI Studio.`
+          `Uploaded "${fileName}" (100%) to Firebase Storage CDN with instant 0ms poster preview!`
         );
       } else if (backend === 'firestore-chunks') {
         setUploadStatus(
           isRulesLocked
-            ? `Uploaded "${fileName}" via Firestore Cloud Chunks fallback because Firebase Storage is in Production Mode (403). Update Storage Rules to stream directly via Storage CDN.`
-            : `Uploaded "${fileName}" (100%) to Firebase Firestore Cloud Chunks! Synced across Phones, Netlify & AI Studio.`
+            ? `Uploaded "${fileName}" via Firestore Cloud Chunks fallback (Storage Rules returned 403). Update Storage Rules & click "Upgrade to Instant Streaming CDN" below so phones don't wait for full chunk downloads.`
+            : `Uploaded "${fileName}" (100%) to Firebase Firestore Cloud Chunks with instant 0ms poster preview.`
         );
       } else {
         setUploadStatus(
@@ -359,6 +363,7 @@ export default function VideoUploaderWithProgress({
         sourceMode: 'upload',
         fileName,
         serverUrl,
+        posterDataUrl,
         backend,
         errorReason
       });
@@ -380,6 +385,56 @@ export default function VideoUploaderWithProgress({
     }
   };
 
+  // Promote existing firestore-video:// chunk upload to Firebase Storage CDN for instant byte-range streaming
+  const handlePromoteToStorageCdn = async () => {
+    setIsMigratingCdn(true);
+    setUploadStatus('Promoting video to Firebase Storage CDN for instant HTTP range streaming...');
+    try {
+      const res = await migrateCachedVideoToFirebaseStorage(
+        activeFileName || currentVideoFileName,
+        (pct, loadedMb, totalMb, note) => {
+          setUploadProgress(pct);
+          setUploadStatus(`${note || 'Publishing to Storage CDN'}: ${pct}% (${loadedMb} MB / ${totalMb} MB)`);
+        }
+      );
+      if (res.ok && res.url) {
+        setStorageRulesLocked(false);
+        setUploadSuccess(true);
+        setActiveUrl(res.url);
+        setUploadStatus(
+          `Upgraded "${res.fileName || 'hero video'}" to Firebase Storage CDN! Instant byte-range streaming is now live across Phones, Netlify & AI Studio.`
+        );
+        refreshLibrary();
+        window.dispatchEvent(
+          new CustomEvent('gfk-video-updated', {
+            detail: {
+              key: 'hero_background_video',
+              videoUrl: res.url,
+              serverUrl: res.url,
+              sourceMode: 'upload',
+              fileName: res.fileName
+            }
+          })
+        );
+        onVideoApplied(res.url, {
+          sourceMode: 'upload',
+          fileName: res.fileName,
+          serverUrl: res.url,
+          posterDataUrl: res.posterDataUrl,
+          backend: 'firebase-storage'
+        });
+        showToast('Video upgraded to instant Firebase Storage CDN streaming!');
+      } else {
+        setStorageRulesLocked(Boolean(res.reason?.includes('403')));
+        setUploadSuccess(false);
+        setUploadStatus(res.reason || 'Could not publish to Firebase Storage CDN.');
+        showToast(res.reason || 'Publish Storage Rules in Firebase Console first.');
+      }
+    } finally {
+      setIsMigratingCdn(false);
+    }
+  };
+
   // Apply custom URL or preset (explicitly switches priority from Upload to URL)
   const handleApplyUrl = async (urlToApply = urlInput, presetLabel?: string) => {
     const cleanUrl = urlToApply.trim();
@@ -388,13 +443,14 @@ export default function VideoUploaderWithProgress({
       return;
     }
 
-    await registerUrlInLibrary(storageKey, cleanUrl, presetLabel);
+    const posterDataUrl = await registerUrlInLibrary(storageKey, cleanUrl, presetLabel);
     setVideoSourceMode('url');
     setActiveSourceMode('url');
     setActiveFileName('');
     setActiveUrl(cleanUrl);
     setUrlInput(cleanUrl);
     setUploadSuccess(true);
+    setStorageRulesLocked(false);
     setUploadStatus('Video URL applied & synced to Firebase across Phones, Netlify & AI Studio!');
     refreshLibrary();
     runStorageAudit();
@@ -410,7 +466,11 @@ export default function VideoUploaderWithProgress({
       })
     );
 
-    onVideoApplied(cleanUrl, { sourceMode: 'url', serverUrl: cleanUrl });
+    onVideoApplied(cleanUrl, {
+      sourceMode: 'url',
+      serverUrl: cleanUrl,
+      posterDataUrl
+    });
     showToast('Video URL synced to Firebase & live across all devices!');
   };
 
@@ -711,22 +771,55 @@ export default function VideoUploaderWithProgress({
                 isUploading ? 'text-emerald-600 animate-bounce' : 'text-emerald-700'
               }`}
             />
-            <div className="text-center">
-              <span className="block text-sm text-zinc-900 font-black">
-                {isUploading ? 'Uploading & Activating Video File...' : 'Click to Choose Video File from Device'}
-              </span>
-              <span className="block text-xs text-zinc-500 font-medium mt-1">
-                Supports HD / 4K MP4, WebM, and MOV files • Plays immediately on Desktop Hero &amp; Mobile
-              </span>
-            </div>
-            <input
-              type="file"
-              accept="video/*"
-              disabled={isUploading}
-              className="hidden"
-              onChange={handleVideoFileChange}
-            />
-          </label>
+              <div className="text-center">
+                <span className="block text-sm text-zinc-900 font-black">
+                  {isUploading ? 'Uploading & Activating Video File...' : 'Click to Choose Video File from Device'}
+                </span>
+                <span className="block text-xs text-zinc-500 font-medium mt-1">
+                  Recommended for instant mobile loading: 720p/1080p H.264 .mp4 (3–15 MB) • Auto-captures 0ms poster frame
+                </span>
+              </div>
+              <input
+                type="file"
+                accept="video/*"
+                disabled={isUploading}
+                className="hidden"
+                onChange={handleVideoFileChange}
+              />
+            </label>
+
+            {/* Notice & 1-Click Migration when video is using slow Firestore Chunks instead of Firebase Storage CDN */}
+            {currentVideoUrl.startsWith('firestore-video://') && !isUploading && (
+              <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+                <div className="space-y-0.5">
+                  <div className="font-black flex items-center gap-1.5 text-amber-900">
+                    <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Currently using Firestore Chunk Fallback (Full Download Required on New Devices)</span>
+                  </div>
+                  <p className="text-[11px] text-amber-900/90 leading-relaxed">
+                    Because Firebase Storage was in Production Mode (403) during upload, new visitors must download all 525KB chunks before playback starts. Publish your <code>cms-videos/</code> Storage Rules and click below for instant HTTP Range streaming.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <a
+                    href={getFirebaseConsoleStorageRulesUrl()}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-2 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-black"
+                  >
+                    Open Storage Rules
+                  </a>
+                  <button
+                    type="button"
+                    disabled={isMigratingCdn}
+                    onClick={handlePromoteToStorageCdn}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-black cursor-pointer disabled:opacity-50"
+                  >
+                    {isMigratingCdn ? 'Promoting...' : 'Upgrade to Instant Storage CDN'}
+                  </button>
+                </div>
+              </div>
+            )}
 
           {/* REAL-TIME PROGRESS BAR & PERCENTAGE DISPLAY */}
           {isUploading && (

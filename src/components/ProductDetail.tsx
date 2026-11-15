@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
-import { ArrowLeft, Star, MapPin, Info, ArrowRight, Briefcase, Clock, Calendar, Check, Car } from 'lucide-react';
+import { ArrowLeft, Star, MapPin, Info, ArrowRight, Briefcase, Clock, Calendar, Check, Car, Flame, ExternalLink, ShieldCheck } from 'lucide-react';
 import { Allotment, Review } from '../types';
+import { useCurrencyRate } from '../lib/currency';
 
 interface ProductDetailProps {
   pkgId: string;
@@ -11,6 +12,8 @@ interface ProductDetailProps {
   onAddReview: (review: Review) => void;
   getNormalizedItem: (id: string) => any;
   onNavigate: (path: string, params?: any) => void;
+  onBack?: () => void;
+  backLabel?: string;
   imageMap: Record<string, string>;
   showToast: (msg: string) => void;
 }
@@ -24,9 +27,12 @@ export default function ProductDetail({
   onAddReview,
   getNormalizedItem,
   onNavigate,
+  onBack,
+  backLabel,
   imageMap,
   showToast
 }: ProductDetailProps) {
+  const { formatPrice } = useCurrencyRate();
   const [travelDate, setTravelDate] = useState('');
   const [selectedSlot, setSelectedSlot] = useState('');
   const [adults, setAdults] = useState(2);
@@ -162,20 +168,26 @@ export default function ProductDetail({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 animate-fade-in w-full font-sans">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-8 pb-16 animate-fade-in w-full font-sans">
       
       {/* Return button */}
       <button
+        type="button"
         onClick={() => {
+          if (onBack) {
+            onBack();
+            return;
+          }
           if (pkgId.startsWith('pkg-')) onNavigate('/search');
           else if (pkgId.startsWith('tr-')) onNavigate('/transport');
           else if (pkgId.startsWith('ht-')) onNavigate('/hotels');
           else if (pkgId.startsWith('tk-')) onNavigate('/tickets');
           else onNavigate('/');
         }}
-        className="inline-flex items-center text-xs font-semibold text-zinc-500 hover:text-zinc-900 mb-8 bg-white px-5 py-2.5 rounded-full border border-zinc-200 transition-all shadow-sm hover:shadow cursor-pointer"
+        className="inline-flex items-center gap-1.5 text-sm font-semibold text-zinc-600 hover:text-zinc-950 mb-6 bg-white hover:bg-zinc-100 px-4 py-2 rounded-xl border border-zinc-200 transition-colors shadow-xs cursor-pointer"
       >
-        <ArrowLeft className="w-4 h-4 mr-2" /> Return to Listings
+        <ArrowLeft className="w-4 h-4" />
+        <span>{backLabel || 'Back'}</span>
       </button>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
@@ -191,6 +203,12 @@ export default function ProductDetail({
                 <MapPin className="w-3.5 h-3.5 mr-1 text-zinc-400" />
                 {product.destination || 'Malaysia'}
               </span>
+              {product.trending && (
+                <span className="inline-flex items-center gap-1 bg-amber-400 text-zinc-950 px-3 py-1 rounded-full text-[0.65rem] font-extrabold uppercase tracking-wider">
+                  <Flame className="w-3 h-3 shrink-0" />
+                  Trending Now
+                </span>
+              )}
               {activeAllotments.length > 0 && (
                 <span className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 rounded-full text-[0.65rem] font-bold">
                   ● Admin Allotted Availability
@@ -260,7 +278,7 @@ export default function ProductDetail({
                   >
                     <div className="flex justify-between items-start mb-2">
                       <span className="font-bold text-zinc-900">{opt.name}</span>
-                      <span className="font-black text-rose-600">RM {opt.price}</span>
+                      <span className="font-black text-rose-600">{formatPrice(opt.price)}</span>
                     </div>
                     {opt.description && <p className="text-[0.65rem] text-zinc-500 font-semibold">{opt.description}</p>}
                     {opt.pax && <p className="text-[0.65rem] text-zinc-500 font-semibold mt-1">Max Pax: {opt.pax}</p>}
@@ -295,7 +313,7 @@ export default function ProductDetail({
                   >
                     <div className="flex justify-between items-start mb-2">
                       <span className="font-bold text-zinc-900">{veh.name}</span>
-                      <span className="font-black text-indigo-600">RM {veh.price}</span>
+                      <span className="font-black text-indigo-600">{formatPrice(veh.price)}</span>
                     </div>
                     <p className="text-[0.65rem] text-zinc-500 font-semibold">Capacity: {veh.cap}</p>
                   </button>
@@ -563,11 +581,16 @@ export default function ProductDetail({
             
             {/* Price Box */}
             <div>
-              <span className="text-[0.6rem] font-bold text-zinc-400 uppercase tracking-wider block mb-1">Pricing per person</span>
+              <span className="text-[0.6rem] font-bold text-zinc-400 uppercase tracking-wider block mb-1">
+                Pricing per person
+              </span>
               <div className="text-2xl font-bold text-zinc-900 tracking-tight">
-                RM {displayPrice} 
+                {formatPrice(displayPrice)}
                 <span className="text-sm text-zinc-400 font-medium ml-1">/Pax</span>
               </div>
+              <span className="text-xs text-zinc-500 font-medium block mt-0.5">
+                All taxes &amp; service charges included
+              </span>
             </div>
 
             {/* B2B Margin Alert */}
@@ -675,7 +698,7 @@ export default function ProductDetail({
                 <div className="flex items-center justify-between bg-zinc-50 border border-zinc-200 rounded-2xl p-3">
                   <div>
                     <span className="text-xs font-bold text-zinc-900 block">Adults (12+ yrs)</span>
-                    <span className="text-[10px] text-zinc-500">RM {displayPrice} / pax</span>
+                    <span className="text-[10px] text-zinc-500">{formatPrice(displayPrice)} / pax</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <button type="button" onClick={() => setAdults(Math.max(1, adults - 1))} className="w-8 h-8 flex items-center justify-center bg-white border border-zinc-200 rounded-lg font-bold text-zinc-900 cursor-pointer">-</button>
@@ -688,7 +711,7 @@ export default function ProductDetail({
                 <div className="flex items-center justify-between bg-zinc-50 border border-zinc-200 rounded-2xl p-3">
                   <div>
                     <span className="text-xs font-bold text-zinc-900 block">Children (3-11 yrs)</span>
-                    <span className="text-[10px] text-emerald-700 font-semibold">RM {childDisplayPrice} / child (25% off)</span>
+                    <span className="text-[10px] text-emerald-700 font-semibold">{formatPrice(childDisplayPrice)} / child (25% off)</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <button type="button" onClick={() => setChildren(Math.max(0, children - 1))} className="w-8 h-8 flex items-center justify-center bg-white border border-zinc-200 rounded-lg font-bold text-zinc-900 cursor-pointer">-</button>
@@ -715,7 +738,9 @@ export default function ProductDetail({
             {/* Total Row */}
             <div className="pt-5 border-t border-zinc-100 flex justify-between items-center font-bold text-zinc-900">
               <span className="text-xs uppercase tracking-wider text-zinc-400">Total charge</span>
-              <span className="text-xl tracking-tight">RM {total.toLocaleString()}</span>
+              <div className="text-right">
+                <span className="text-xl tracking-tight block">{formatPrice(total)}</span>
+              </div>
             </div>
 
             {/* Confirm action */}
@@ -726,6 +751,46 @@ export default function ProductDetail({
               {isAgent ? 'Secure B2B Allocation' : 'Book Now'}
               <ArrowRight className="w-4 h-4 ml-2" />
             </button>
+
+            {/* Official Marketplace Options: Viator & TripAdvisor */}
+            <div className="pt-4 border-t border-zinc-100 space-y-2.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-zinc-700">
+                <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                  Also Bookable via Marketplace
+                </span>
+                <span className="text-[10px] text-zinc-400">Free 24h Cancel</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <a
+                  href={
+                    product.viatorUrl ||
+                    `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="py-2.5 px-3 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-[#34E0A1] text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
+                >
+                  <span>Viator</span>
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                </a>
+                <a
+                  href={
+                    product.tripadvisorUrl ||
+                    `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${product.title || product.name || 'Malaysia'} Malaysia`)}`
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="py-2.5 px-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-[#34E0A1] text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
+                >
+                  <span>TripAdvisor</span>
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                </a>
+              </div>
+              <p className="text-[10px] text-zinc-500 text-center leading-relaxed">
+                Reserve Now &amp; Pay Later options &amp; verified traveler protection available.
+              </p>
+            </div>
 
           </div>
         </div>

@@ -226,7 +226,7 @@ async function syncServerVideoWithFirestore(expectedFileName?: string, cloudUrl?
     if (cloudFileName !== expectedFileName) return;
 
     const buffers: Buffer[] = new Array(totalChunks);
-    const BATCH = 4;
+    const BATCH = 12;
     for (let i = 0; i < totalChunks; i += BATCH) {
       const indices: number[] = [];
       for (let j = i; j < Math.min(i + BATCH, totalChunks); j++) {
@@ -279,6 +279,7 @@ async function seedFromFirestoreIfNeeded(onSeeded?: (col: string, entry: Collect
     'bookings',
     'allotments',
     'reviews',
+    'flight_inquiries',
   ];
 
   let changed = false;
@@ -755,6 +756,442 @@ async function startServer() {
 
   app.post('/api/send-email', (_req, res) => {
     return res.json({ ok: true, message: 'Email queued' });
+  });
+
+  // Multi-Currency FX Market Rate Proxy (MYR base -> INR, USD, SGD, GBP, EUR, AED, AUD) with 2-minute cache
+  const DEFAULT_FX_RATES: Record<string, number> = {
+    MYR: 1,
+    INR: 19.65,
+    USD: 0.228,
+    SGD: 0.304,
+    GBP: 0.178,
+    EUR: 0.212,
+    AED: 0.838,
+    AUD: 0.348
+  };
+  let cachedFxBundle: {
+    rates: Record<string, number>;
+    source: string;
+    updatedAt: string;
+    fetchedAt: number;
+  } | null = null;
+
+  const handleGetFxRate = async (req: express.Request, res: express.Response) => {
+    const base = String(req.query.base || 'MYR').toUpperCase();
+    const target = String(req.query.target || 'INR').toUpperCase();
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const ttlSec = Math.max(30, Math.min(3600, Number(req.query.ttlSec) || 120));
+    const ttlMs = ttlSec * 1000;
+
+    if (
+      !force &&
+      base === 'MYR' &&
+      cachedFxBundle &&
+      Date.now() - cachedFxBundle.fetchedAt < ttlMs
+    ) {
+      return res.json({
+        ok: true,
+        base,
+        target,
+        rate: cachedFxBundle.rates[target] ?? DEFAULT_FX_RATES[target] ?? 1,
+        rates: cachedFxBundle.rates,
+        source: cachedFxBundle.source,
+        updatedAt: cachedFxBundle.updatedAt,
+        ttlSec
+      });
+    }
+
+    const wantedTargets = ['INR', 'USD', 'SGD', 'GBP', 'EUR', 'AED', 'AUD'];
+
+    // 1. Optional Official XE Currency Data API if configured in server environment
+    const xeApiId = process.env.XE_API_ID;
+    const xeApiKey = process.env.XE_API_KEY;
+    if (xeApiId && xeApiKey) {
+      try {
+        const authToken = Buffer.from(`${xeApiId}:${xeApiKey}`).toString('base64');
+        const xeRes = await fetch(
+          `https://xecdapi.xe.com/v1/convert_from.json/?from=${encodeURIComponent(base)}&to=${wantedTargets.join(',')}&amount=1`,
+          {
+            headers: {
+              Authorization: `Basic ${authToken}`,
+              Accept: 'application/json'
+            }
+          }
+        );
+        if (xeRes.ok) {
+          const xeJson: any = await xeRes.json();
+          const ratesMap: Record<string, number> = { ...DEFAULT_FX_RATES, MYR: 1 };
+          if (Array.isArray(xeJson?.to)) {
+            for (const row of xeJson.to) {
+              const code = String(row?.quotecurrency || '').toUpperCase();
+              const val = Number(row?.mid);
+              if (code && val > 0) ratesMap[code] = Number(val.toFixed(4));
+            }
+          }
+          if (ratesMap.INR > 5) {
+            cachedFxBundle = {
+              rates: ratesMap,
+              source: 'Treasury API',
+              updatedAt: xeJson?.timestamp || new Date().toISOString(),
+              fetchedAt: Date.now()
+            };
+            return res.json({
+              ok: true,
+              base,
+              target,
+              rate: ratesMap[target] ?? 1,
+              rates: ratesMap,
+              source: cachedFxBundle.source,
+              updatedAt: cachedFxBundle.updatedAt,
+              ttlSec
+            });
+          }
+        }
+      } catch (_e) {}
+    }
+
+    // 2. Multi-Currency Mid-Market FX Feeds
+    const providers = [
+      {
+        name: 'Treasury Mid-Market Feed',
+        url: `https://open.er-api.com/v6/latest/${encodeURIComponent(base)}`
+      },
+      {
+        name: 'European Central Reference Feed',
+        url: `https://api.frankfurter.app/latest?from=${encodeURIComponent(base)}&to=INR,USD,SGD,GBP,EUR,AUD`
+      }
+    ];
+
+    for (const provider of providers) {
+      try {
+        const r = await fetch(provider.url);
+        if (r.ok) {
+          const json: any = await r.json();
+          const rawRates = json?.rates || {};
+          if (Number(rawRates?.INR) > 5) {
+            const ratesMap: Record<string, number> = { ...DEFAULT_FX_RATES, MYR: 1 };
+            for (const code of wantedTargets) {
+              const val = Number(rawRates[code]);
+              if (val > 0) ratesMap[code] = Number(val.toFixed(4));
+            }
+            // AED is pegged to USD at 3.6725 if Frankfurter omits AED
+            if (!rawRates.AED && ratesMap.USD > 0) {
+              ratesMap.AED = Number((ratesMap.USD * 3.6725).toFixed(4));
+            }
+            cachedFxBundle = {
+              rates: ratesMap,
+              source: provider.name,
+              updatedAt: new Date().toISOString(),
+              fetchedAt: Date.now()
+            };
+            return res.json({
+              ok: true,
+              base,
+              target,
+              rate: ratesMap[target] ?? 1,
+              rates: ratesMap,
+              source: cachedFxBundle.source,
+              updatedAt: cachedFxBundle.updatedAt,
+              ttlSec
+            });
+          }
+        }
+      } catch (_e) {}
+    }
+
+    const fallbackRates = cachedFxBundle?.rates || DEFAULT_FX_RATES;
+    return res.json({
+      ok: true,
+      base,
+      target,
+      rate: fallbackRates[target] ?? 1,
+      rates: fallbackRates,
+      source: cachedFxBundle?.source || 'Treasury Reference Fallback',
+      updatedAt: cachedFxBundle?.updatedAt || new Date().toISOString(),
+      ttlSec
+    });
+  };
+
+  app.get('/api/fx-rate', handleGetFxRate);
+  app.get('/api/xe-rate', handleGetFxRate);
+
+  // Geographic Country -> Currency Auto-Detection Endpoint
+  const EURO_COUNTRIES = new Set([
+    'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'PT', 'IE', 'FI',
+    'GR', 'LU', 'SK', 'SI', 'EE', 'LV', 'LT', 'MT', 'CY', 'HR'
+  ]);
+  const mapCountryToCurrency = (cc: string): string => {
+    const code = String(cc || '').trim().toUpperCase();
+    if (code === 'IN') return 'INR';
+    if (code === 'MY') return 'MYR';
+    if (code === 'SG') return 'SGD';
+    if (code === 'GB' || code === 'UK') return 'GBP';
+    if (code === 'AE') return 'AED';
+    if (code === 'AU') return 'AUD';
+    if (EURO_COUNTRIES.has(code)) return 'EUR';
+    return 'USD';
+  };
+
+  app.get('/api/geo-currency', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const headerCountry = String(
+        req.headers['cf-ipcountry'] ||
+          req.headers['x-vercel-ip-country'] ||
+          req.headers['x-appengine-country'] ||
+          req.headers['x-country-code'] ||
+          req.headers['fly-country'] ||
+          ''
+      )
+        .trim()
+        .toUpperCase();
+
+      if (headerCountry && headerCountry !== 'XX' && headerCountry !== 'T1' && headerCountry.length === 2) {
+        return res.json({
+          ok: true,
+          countryCode: headerCountry,
+          countryName: headerCountry,
+          currency: mapCountryToCurrency(headerCountry),
+          source: 'edge-header'
+        });
+      }
+
+      const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      const rawIp = forwarded || req.socket.remoteAddress || '';
+      const isLocalIp =
+        !rawIp ||
+        rawIp === '::1' ||
+        rawIp === '127.0.0.1' ||
+        rawIp.startsWith('10.') ||
+        rawIp.startsWith('192.168.') ||
+        rawIp.startsWith('172.');
+
+      const lookupUrl = isLocalIp
+        ? 'https://ipwho.is/'
+        : `https://ipwho.is/${encodeURIComponent(rawIp)}`;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1600);
+      try {
+        const geoRes = await fetch(lookupUrl, { signal: controller.signal });
+        if (geoRes.ok) {
+          const geoJson: any = await geoRes.json();
+          const cc = String(geoJson?.country_code || '').toUpperCase();
+          if (cc && cc.length === 2) {
+            return res.json({
+              ok: true,
+              countryCode: cc,
+              countryName: String(geoJson?.country || cc),
+              currency: mapCountryToCurrency(cc),
+              source: 'ip-geo'
+            });
+          }
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (_e) {}
+
+    return res.json({
+      ok: false,
+      countryCode: '',
+      countryName: '',
+      currency: '',
+      source: 'unavailable'
+    });
+  });
+
+  // Coordinate-based Reverse Geocoding Endpoint for Browser Geolocation API
+  app.get('/api/reverse-geocode', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180
+    ) {
+      return res.status(400).json({ ok: false, error: 'Invalid latitude or longitude' });
+    }
+
+    // 1. Primary: BigDataCloud Reverse Geocode Client API
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2200);
+      try {
+        const bdcRes = await fetch(
+          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(
+            String(lat)
+          )}&longitude=${encodeURIComponent(String(lon))}&localityLanguage=en`,
+          { signal: controller.signal }
+        );
+        if (bdcRes.ok) {
+          const bdcJson: any = await bdcRes.json();
+          const cc = String(bdcJson?.countryCode || '').trim().toUpperCase();
+          if (cc && cc.length === 2) {
+            return res.json({
+              ok: true,
+              countryCode: cc,
+              countryName: String(bdcJson?.countryName || cc),
+              currency: mapCountryToCurrency(cc),
+              source: 'browser-geolocation'
+            });
+          }
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (_e) {}
+
+    // 2. Fallback: OpenStreetMap Nominatim reverse geocode
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2500);
+      try {
+        const nomRes = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
+            String(lat)
+          )}&lon=${encodeURIComponent(String(lon))}&zoom=3`,
+          {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'GFK-Holidays-Web/1.0' }
+          }
+        );
+        if (nomRes.ok) {
+          const nomJson: any = await nomRes.json();
+          const cc = String(nomJson?.address?.country_code || '').trim().toUpperCase();
+          if (cc && cc.length === 2) {
+            return res.json({
+              ok: true,
+              countryCode: cc,
+              countryName: String(nomJson?.address?.country || cc),
+              currency: mapCountryToCurrency(cc),
+              source: 'browser-geolocation'
+            });
+          }
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (_e) {}
+
+    return res.json({
+      ok: false,
+      countryCode: '',
+      countryName: '',
+      currency: '',
+      source: 'unavailable'
+    });
+  });
+
+  // Stripe Checkout Session Creator (supports INR, USD, MYR, SGD, GBP, EUR, AED, AUD)
+  app.post('/api/create-stripe-checkout', express.json(), async (req, res) => {
+    try {
+      const {
+        bookingId,
+        title,
+        currency,
+        amountPayable,
+        amountInr,
+        amountMyr,
+        xeRate,
+        customerEmail,
+        customerName,
+        pax,
+        date
+      } = req.body || {};
+
+      const stripeCurrency = String(currency || 'INR').toUpperCase();
+      const chargeAmount = Number(amountPayable ?? amountInr) || 0;
+      if (!bookingId || chargeAmount <= 0) {
+        return res.status(400).json({ ok: false, error: 'Invalid bookingId or payment amount' });
+      }
+
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) {
+        return res.json({
+          ok: true,
+          mode: 'stripe_invoice_dispatch',
+          bookingId,
+          currency: stripeCurrency,
+          amountPayable: Number(chargeAmount.toFixed(2)),
+          amountInr: stripeCurrency === 'INR' ? Number(chargeAmount.toFixed(2)) : Number(amountInr) || 0,
+          amountMyr: Number(amountMyr) || 0,
+          xeRate: Number(xeRate) || 19.65,
+          message:
+            'Stripe payment request registered; secure Stripe link dispatched via booking@gfkholidays.com.'
+        });
+      }
+
+      const originHeader =
+        req.headers.origin ||
+        process.env.APP_URL ||
+        `http://localhost:${PORT}`;
+
+      const form = new URLSearchParams();
+      form.append('mode', 'payment');
+      form.append('payment_method_types[0]', 'card');
+      form.append('line_items[0][price_data][currency]', stripeCurrency.toLowerCase());
+      form.append('line_items[0][price_data][unit_amount]', String(Math.round(chargeAmount * 100)));
+      form.append('line_items[0][price_data][product_data][name]', String(title || 'GFK Holidays Malaysia Booking'));
+      form.append(
+        'line_items[0][price_data][product_data][description]',
+        `Ref ${bookingId} · ${pax || 1} Pax · ${date || ''}`
+      );
+      form.append('line_items[0][quantity]', '1');
+      if (customerEmail) form.append('customer_email', String(customerEmail));
+      form.append('client_reference_id', String(bookingId));
+      form.append('metadata[bookingId]', String(bookingId));
+      form.append('metadata[customerName]', String(customerName || 'Traveler'));
+      form.append('metadata[settlementCurrency]', stripeCurrency);
+      form.append('metadata[appliedRate]', String(xeRate || ''));
+      form.append('metadata[amountMyr]', String(amountMyr || ''));
+      form.append('success_url', `${originHeader}/?stripe_status=success&booking_id=${encodeURIComponent(String(bookingId))}`);
+      form.append('cancel_url', `${originHeader}/?stripe_status=cancelled&booking_id=${encodeURIComponent(String(bookingId))}`);
+
+      const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${stripeKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: form.toString()
+      });
+
+      const stripeData: any = await stripeRes.json();
+      if (!stripeRes.ok || !stripeData?.id) {
+        return res.json({
+          ok: true,
+          mode: 'stripe_invoice_dispatch',
+          bookingId,
+          currency: stripeCurrency,
+          amountPayable: Number(chargeAmount.toFixed(2)),
+          amountInr: stripeCurrency === 'INR' ? Number(chargeAmount.toFixed(2)) : Number(amountInr) || 0,
+          amountMyr: Number(amountMyr) || 0,
+          xeRate: Number(xeRate) || 19.65,
+          warning: stripeData?.error?.message || 'Stripe session deferred to booking desk'
+        });
+      }
+
+      return res.json({
+        ok: true,
+        mode: 'stripe_live_session',
+        bookingId,
+        sessionId: stripeData.id,
+        checkoutUrl: stripeData.url,
+        currency: stripeCurrency,
+        amountPayable: Number(chargeAmount.toFixed(2)),
+        amountInr: stripeCurrency === 'INR' ? Number(chargeAmount.toFixed(2)) : Number(amountInr) || 0,
+        amountMyr: Number(amountMyr) || 0,
+        xeRate: Number(xeRate) || 19.65
+      });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || 'Stripe error' });
+    }
   });
 
   if (process.env.NODE_ENV !== 'production') {

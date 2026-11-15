@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Agent, Booking, Package, TransportRoute, Hotel, Ticket, Allotment, Review, GlobalSettings } from './types';
+import { Agent, Booking, Package, TransportRoute, Hotel, Ticket, Allotment, Review, GlobalSettings, FlightInquiry } from './types';
 import { useFirestoreCollection } from './hooks/useFirestore';
 import {
   INITIAL_PACKAGES,
@@ -18,14 +18,72 @@ import Footer from './components/Footer';
 import MalaysiaHome from './components/MalaysiaHome';
 import CatalogBrowser from './components/CatalogBrowser';
 import ProductDetail from './components/ProductDetail';
-import { CheckoutForm, BookingSuccess } from './components/CheckoutAndSuccess';
+import { CheckoutForm, BookingSuccess, StripeCheckoutMeta } from './components/CheckoutAndSuccess';
 import AgentPortal from './components/AgentPortal';
 import AdminPortal from './components/AdminPortal';
 import CtfuBuilder from './components/CtfuBuilder';
 import MobileBottomNav from './components/MobileBottomNav';
+import MarketplaceBookingSection from './components/MarketplaceBookingSection';
+import {
+  syncFxConfig,
+  formatCurrencyValue,
+  SupportedCurrency,
+  setDefaultCurrencyByCountry,
+  resolveCountryFromCoordinates,
+  detectGeoCurrency
+} from './lib/currency';
+import { isHomeSectionId, scrollToHomeSection } from './lib/homeSections';
 import { Sparkles } from 'lucide-react';
 
+function useBrowserGeolocationCurrency() {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+
+    if (!('geolocation' in navigator) || !navigator.geolocation) {
+      detectGeoCurrency().catch(() => {});
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        if (cancelled) return;
+        const { latitude, longitude } = position.coords;
+        const resolved = await resolveCountryFromCoordinates(latitude, longitude);
+        if (cancelled) return;
+
+        if (resolved?.countryCode) {
+          setDefaultCurrencyByCountry(
+            resolved.countryCode,
+            resolved.countryName,
+            'browser-geolocation'
+          );
+        } else {
+          detectGeoCurrency().catch(() => {});
+        }
+      },
+      () => {
+        if (!cancelled) {
+          detectGeoCurrency().catch(() => {});
+        }
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 6000,
+        maximumAge: 300000
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+}
+
 export default function App() {
+  // Automatically determine user country via Browser Geolocation API and set site-wide default currency
+  useBrowserGeolocationCurrency();
+
   // 1. Core Persistent State Engines using Firestore
   const [packages, setPackages] = useFirestoreCollection<Package>('packages', INITIAL_PACKAGES);
   const [transport, setTransport] = useFirestoreCollection<TransportRoute>('transport', INITIAL_TRANSPORT);
@@ -35,6 +93,7 @@ export default function App() {
   const [bookings, setBookings] = useFirestoreCollection<Booking>('bookings', INITIAL_BOOKINGS);
   const [allotments, setAllotments] = useFirestoreCollection<Allotment>('allotments', INITIAL_ALLOTMENTS);
   const [reviews, setReviews] = useFirestoreCollection<Review>('reviews', []);
+  const [flightInquiries, setFlightInquiries] = useFirestoreCollection<FlightInquiry>('flight_inquiries', []);
   const [settings, setSettings] = useFirestoreCollection<GlobalSettings>('settings', [DEFAULT_GLOBAL_SETTINGS]);
 
   const rawGlobalSettings = settings.find(s => s.id === 'global');
@@ -51,6 +110,7 @@ export default function App() {
     return '/';
   });
   const [routeParams, setRouteParams] = useState<any>({});
+  const [navHistory, setNavHistory] = useState<Array<{ path: string; params?: any }>>([]);
 
   // 3. Authentication & Sessions State Engine
   const [userRole, setUserRole] = useState<'guest' | 'customer' | 'agent' | 'admin'>(() => {
@@ -80,6 +140,33 @@ export default function App() {
     }
   }, [globalSettings.seoTitle, globalSettings.seoDescription, globalSettings.seoKeywords]);
 
+  // Sync Admin-configured FX buffer (+₹1 default INR, +2% international) and auto-refresh interval (120s default)
+  useEffect(() => {
+    syncFxConfig({
+      markupInr:
+        globalSettings.fxMarkupInr !== undefined ? Number(globalSettings.fxMarkupInr) : 1,
+      markupPercent:
+        globalSettings.fxMarkupPercent !== undefined ? Number(globalSettings.fxMarkupPercent) : 0,
+      intlMarkupPercent:
+        globalSettings.fxIntlMarkupPercent !== undefined
+          ? Number(globalSettings.fxIntlMarkupPercent)
+          : 2,
+      refreshSeconds:
+        globalSettings.fxRefreshSeconds !== undefined
+          ? Number(globalSettings.fxRefreshSeconds)
+          : 120,
+      useManualRate: Boolean(globalSettings.fxUseManualRate),
+      manualRateOverride: Number(globalSettings.fxManualRateOverride) || 20.65
+    });
+  }, [
+    globalSettings.fxMarkupInr,
+    globalSettings.fxMarkupPercent,
+    globalSettings.fxIntlMarkupPercent,
+    globalSettings.fxRefreshSeconds,
+    globalSettings.fxUseManualRate,
+    globalSettings.fxManualRateOverride
+  ]);
+
   // Browser URL /admin detection (Admin portal is only accessible via browser URL /admin)
   useEffect(() => {
     const checkBrowserAdminUrl = () => {
@@ -107,14 +194,141 @@ export default function App() {
     };
   }, []);
 
+  // Handle Stripe Checkout redirect return (?stripe_status=success|cancelled&booking_id=...)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const stripeStatus = params.get('stripe_status');
+    const bookingId = params.get('booking_id');
+    if (!stripeStatus || !bookingId) return;
+
+    const matched = bookings.find(b => b.id === bookingId);
+    if (!matched) return;
+
+    if (stripeStatus === 'success') {
+      if (matched.paymentStatus !== 'PAID') {
+        const updated = bookings.map(b =>
+          b.id === bookingId
+            ? { ...b, paymentStatus: 'PAID' as const, status: 'CONFIRMED' as const }
+            : b
+        );
+        setBookings(updated);
+      }
+      const productItem = getNormalizedItem(matched.pkgId);
+      setRouteParams({
+        booking: { ...matched, paymentStatus: 'PAID', status: 'CONFIRMED' },
+        product: productItem
+      });
+      setCurrentPath('/booking-success');
+      showToast(`Stripe INR payment confirmed for ${bookingId}.`);
+    } else if (stripeStatus === 'cancelled') {
+      showToast(`Stripe checkout cancelled for ${bookingId}. You can retry payment anytime.`);
+    }
+
+    const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }, [bookings.length]);
+
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3200);
   };
 
+  const [pendingSectionId, setPendingSectionId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined' && isHomeSectionId(window.location.hash)) {
+      return window.location.hash.replace(/^#/, '');
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (currentPath !== '/' || !pendingSectionId) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      requestAnimationFrame(() => {
+        scrollToHomeSection(pendingSectionId);
+        setPendingSectionId(null);
+      });
+    }, 60);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [currentPath, pendingSectionId]);
+
   const handleNavigate = (path: string, params: any = {}) => {
+    const hashSection =
+      path.startsWith('/#') || path.startsWith('#')
+        ? path.replace(/^\/?#/, '')
+        : typeof params?.scrollToSection === 'string'
+        ? params.scrollToSection.replace(/^#/, '')
+        : null;
+
+    if (hashSection && isHomeSectionId(hashSection)) {
+      if (currentPath === '/') {
+        scrollToHomeSection(hashSection);
+        return;
+      }
+      setNavHistory((prev) => [...prev.slice(-9), { path: currentPath, params: routeParams }]);
+      setCurrentPath('/');
+      setRouteParams(params);
+      setPendingSectionId(hashSection);
+      return;
+    }
+
+    if (path === '/') {
+      setNavHistory([]);
+      setPendingSectionId(null);
+      if (typeof window !== 'undefined' && window.location.hash && !window.location.hash.includes('admin')) {
+        window.history.replaceState(null, document.title, '/');
+      }
+    } else if (path !== currentPath || params?.id !== routeParams?.id) {
+      setNavHistory((prev) => [...prev.slice(-9), { path: currentPath, params: routeParams }]);
+    }
     setCurrentPath(path);
     setRouteParams(params);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const getRouteLabel = (path?: string): string => {
+    switch (path) {
+      case '/':
+        return 'Back to Home';
+      case '/search':
+        return 'Back to Holiday Packages';
+      case '/hotels':
+        return 'Back to Hotels';
+      case '/tickets':
+        return 'Back to Attraction Tickets';
+      case '/transport':
+        return 'Back to Transfers';
+      case '/flights':
+        return 'Back to Available Flights';
+      case '/restaurants':
+        return 'Back to Dining & Cruises';
+      case '/cruises':
+        return 'Back to Cruises';
+      case '/marketplaces':
+        return 'Back to Marketplace Bookings';
+      case '/package':
+        return 'Back to Package Details';
+      default:
+        return 'Back';
+    }
+  };
+
+  const handleGoBack = () => {
+    if (navHistory.length > 0) {
+      const prev = navHistory[navHistory.length - 1];
+      setNavHistory((stack) => stack.slice(0, -1));
+      setCurrentPath(prev.path || '/');
+      setRouteParams(prev.params || {});
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    setCurrentPath('/');
+    setRouteParams({});
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -196,15 +410,96 @@ export default function App() {
     );
   };
 
-  const handleConfirmCheckout = async (clientName: string, email: string, phone: string, paymentMethod: string) => {
+  const handleCreateFlightInquiry = async (
+    payload: Omit<FlightInquiry, 'id' | 'status' | 'createdAt' | 'targetEmail'>
+  ): Promise<FlightInquiry> => {
+    const flightsDeskEmail = globalSettings?.flightsEmail || 'flights@gfkholidays.com';
+    const newInquiry: FlightInquiry = {
+      ...payload,
+      id: `FLT-${Math.floor(100000 + Math.random() * 900000)}`,
+      targetEmail: flightsDeskEmail,
+      status: 'NEW',
+      createdAt: new Date().toISOString().split('T')[0]
+    };
+
+    try {
+      await setFlightInquiries([...flightInquiries, newInquiry]);
+    } catch (err) {
+      console.error('Failed to persist flight inquiry to Firestore:', err);
+    }
+
+    try {
+      const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
+      await fetch('/api/send-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          to: flightsDeskEmail,
+          replyTo: payload.customerEmail,
+          subject: `[FLIGHT INQUIRY ${newInquiry.id}] ${payload.airline}${payload.flightCode ? ` (${payload.flightCode})` : ''} · ${payload.origin} → ${payload.destination}`,
+          html: `<div style="font-family: sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
+            <h2 style="margin-top: 0; color: #0369a1;">New Website Flight Fare / Desk Inquiry (${newInquiry.id})</h2>
+            <p><strong>Routed To:</strong> ${flightsDeskEmail}</p>
+            <p><strong>Inquiry Type:</strong> ${payload.inquiryType}</p>
+            <p><strong>Airline:</strong> ${payload.airline} ${payload.flightCode ? `(${payload.flightCode})` : ''}</p>
+            <p><strong>Route:</strong> ${payload.origin} → ${payload.destination}</p>
+            <p><strong>Travel Date:</strong> ${payload.departureDate} · <strong>Passengers:</strong> ${payload.pax}</p>
+            <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 16px 0;" />
+            <p><strong>Customer:</strong> ${payload.customerName} (${payload.customerEmail})</p>
+            <p><strong>Phone / WhatsApp:</strong> ${payload.customerPhone}</p>
+            <p><strong>Notes:</strong> ${payload.notes || '-'}</p>
+          </div>`
+        })
+      });
+
+      if (payload.customerEmail) {
+        await fetch('/api/send-email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: token ? `Bearer ${token}` : ''
+          },
+          body: JSON.stringify({
+            to: payload.customerEmail,
+            replyTo: flightsDeskEmail,
+            subject: `Flight Quote Request Received [${newInquiry.id}] - ${payload.origin} to ${payload.destination}`,
+            html: `<div style="font-family: sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
+              <h2 style="margin-top: 0;">Flight Inquiry Received</h2>
+              <p>Dear ${payload.customerName},</p>
+              <p>Your airline fare quote / flight inquiry (<strong>${newInquiry.id}</strong>) has been routed to our Flight Desk at <strong>${flightsDeskEmail}</strong>.</p>
+              <p><strong>Route:</strong> ${payload.origin} → ${payload.destination} (${payload.departureDate}, ${payload.pax} pax)</p>
+              <p style="font-size: 12px; color: #52525b;">Note: All payment &amp; bank transfer matters are handled by ${globalSettings?.bookingEmail || 'booking@gfkholidays.com'}.</p>
+            </div>`
+          })
+        });
+      }
+    } catch (err) {
+      console.error('Flight inquiry email dispatch warning:', err);
+    }
+
+    showToast(`Flight inquiry sent to ${flightsDeskEmail}`);
+    return newInquiry;
+  };
+
+  const handleConfirmCheckout = async (
+    clientName: string,
+    email: string,
+    phone: string,
+    paymentMethod: 'stripe' | 'credit',
+    stripeMeta?: StripeCheckoutMeta
+  ) => {
     const productItem = routeParams.product;
     if (!productItem) return;
 
     const voucherCode = 'GFK' + Math.floor(100000 + Math.random() * 900000);
     const checkoutTotal = routeParams.total;
+    const paymentsDeskEmail = globalSettings?.bookingEmail || 'booking@gfkholidays.com';
     const customMessage =
       globalSettings?.invoiceMessage ||
-      `Direct Bank Transfers: Payment proof must be emailed to ${globalSettings?.accountsEmail || 'accounts@gfkholidays.com'} within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.`;
+      `Stripe Payments (INR): Payment confirmations & Stripe receipts are managed via ${paymentsDeskEmail}.`;
 
     const newBooking: Booking = {
       id: voucherCode,
@@ -216,12 +511,53 @@ export default function App() {
       total: checkoutTotal,
       commission: routeParams.commission || 0,
       status: 'REQUEST_RECEIVED',
-      paymentMethod: paymentMethod as any,
-      paymentStatus: paymentMethod === 'credit' ? 'CREDIT_CHARGED' : 'PENDING_BANK_TRANSFER',
+      paymentMethod: paymentMethod,
+      paymentStatus: paymentMethod === 'credit' ? 'CREDIT_CHARGED' : 'PENDING_STRIPE',
+      currency: stripeMeta?.currency || 'INR',
+      xeRate: stripeMeta?.xeRate,
+      chargedAmount: stripeMeta?.chargedAmount,
+      chargedAmountInr: stripeMeta?.chargedAmountInr,
       createdAt: new Date().toISOString().split('T')[0],
       phone: phone,
       email: email
     };
+
+    let stripeRedirectUrl: string | null = null;
+    if (paymentMethod === 'stripe') {
+      try {
+        const stripeRes = await fetch('/api/create-stripe-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bookingId: voucherCode,
+            title: productItem.title || productItem.name || 'GFK Holidays Malaysia Service',
+            currency: stripeMeta?.currency || 'INR',
+            amountPayable:
+              stripeMeta?.chargedAmount ||
+              stripeMeta?.chargedAmountInr ||
+              Math.round(checkoutTotal * 19.65),
+            amountInr: stripeMeta?.chargedAmountInr || Math.round(checkoutTotal * 19.65),
+            amountMyr: checkoutTotal,
+            xeRate: stripeMeta?.xeRate || 19.65,
+            customerEmail: email,
+            customerName: clientName,
+            pax: routeParams.pax,
+            date: newBooking.date
+          })
+        });
+        if (stripeRes.ok) {
+          const stripeData = await stripeRes.json();
+          if (stripeData?.sessionId) {
+            newBooking.stripeSessionId = stripeData.sessionId;
+          }
+          if (stripeData?.mode === 'stripe_live_session' && stripeData?.checkoutUrl) {
+            stripeRedirectUrl = stripeData.checkoutUrl;
+          }
+        }
+      } catch (err) {
+        console.warn('Stripe checkout initialization fallback:', err);
+      }
+    }
 
     setBookings([...bookings, newBooking]);
 
@@ -271,7 +607,7 @@ export default function App() {
 
     try {
       const token = globalSettings?.bookingEmailToken || globalSettings?.accountsEmailToken;
-      const adminEmail = globalSettings?.accountsEmail || 'accounts@gfkholidays.com';
+      const adminEmail = globalSettings?.bookingEmail || 'booking@gfkholidays.com';
 
       await fetch('/api/send-email', {
         method: 'POST',
@@ -301,7 +637,8 @@ export default function App() {
             <p><strong>Customer:</strong> ${clientName} (${email})</p>
             <p><strong>Phone:</strong> ${phone}</p>
             <p><strong>Product:</strong> ${productItem.title || productItem.name}</p>
-            <p><strong>Total:</strong> RM ${checkoutTotal.toLocaleString()}</p>
+            <p><strong>Base Amount (MYR):</strong> RM ${checkoutTotal.toLocaleString()}</p>
+            ${stripeMeta?.chargedAmount ? `<p><strong>Stripe Payable (${stripeMeta.currency} @ ${stripeMeta.xeRate.toFixed(4)}):</strong> ${formatCurrencyValue(stripeMeta.chargedAmount, stripeMeta.currency as SupportedCurrency, true)}</p>` : ''}
             <p><strong>Payment Method:</strong> ${paymentMethod.toUpperCase()}</p>
             <p>Log into the admin portal (/admin) to confirm and invoice this booking.</p>
           </div>`
@@ -309,6 +646,11 @@ export default function App() {
       });
     } catch (err) {
       console.error('Failed to trigger email API', err);
+    }
+
+    if (stripeRedirectUrl) {
+      window.location.href = stripeRedirectUrl;
+      return;
     }
 
     handleNavigate('/booking-success', { booking: newBooking, product: productItem });
@@ -350,6 +692,9 @@ export default function App() {
             reviews={reviews}
             setReviews={setReviews}
             onUpdateReviews={setReviews}
+            flightInquiries={flightInquiries}
+            setFlightInquiries={setFlightInquiries}
+            onUpdateFlightInquiries={setFlightInquiries}
             settings={settings}
             setSettings={setSettings}
             onUpdateSettings={setSettings}
@@ -365,7 +710,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-50 font-sans text-zinc-900 selection:bg-emerald-500 selection:text-white">
+    <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-zinc-50 font-sans text-zinc-900 selection:bg-emerald-500 selection:text-white">
       {/* Toast Alert */}
       {toastMsg && (
         <div className="fixed top-24 right-4 z-[110] bg-zinc-950 text-white px-6 py-4 rounded-2xl shadow-2xl animate-slide-in flex items-center font-bold tracking-tight border border-zinc-800">
@@ -395,7 +740,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="flex-grow pt-16 md:pt-20 pb-16 md:pb-0 flex flex-col">
+      <main className="flex-grow w-full max-w-full overflow-x-clip pt-16 md:pt-20 pb-16 md:pb-0 flex flex-col">
         {/* Path: HOME — Flagship Malaysia B2C Experience & Activities Hub */}
         {currentPath === '/' && (
           <MalaysiaHome
@@ -408,6 +753,7 @@ export default function App() {
             globalSettings={globalSettings}
             onNavigate={handleNavigate}
             onRequestLogin={setAuthModalRole}
+            onSubmitFlightInquiry={handleCreateFlightInquiry}
             imageMap={IMAGE_MAP}
           />
         )}
@@ -420,9 +766,27 @@ export default function App() {
             transport={transport}
             hotels={hotels}
             tickets={tickets}
+            globalSettings={globalSettings}
             userRole={userRole}
             agentCommission={currentAgent ? currentAgent.commission : 10}
             onNavigate={handleNavigate}
+            imageMap={IMAGE_MAP}
+          />
+        )}
+
+        {/* Path: B2C AVAILABLE FLIGHTS (UPPER VIEW + SEARCH + QUOTE INQUIRIES) */}
+        {currentPath === '/flights' && (
+          <CatalogBrowser
+            viewType="flights"
+            packages={packages}
+            transport={transport}
+            hotels={hotels}
+            tickets={tickets}
+            globalSettings={globalSettings}
+            userRole={userRole}
+            agentCommission={currentAgent ? currentAgent.commission : 10}
+            onNavigate={handleNavigate}
+            onSubmitFlightInquiry={handleCreateFlightInquiry}
             imageMap={IMAGE_MAP}
           />
         )}
@@ -435,6 +799,7 @@ export default function App() {
             transport={transport}
             hotels={hotels}
             tickets={tickets}
+            globalSettings={globalSettings}
             userRole={userRole}
             agentCommission={currentAgent ? currentAgent.commission : 10}
             onNavigate={handleNavigate}
@@ -450,6 +815,7 @@ export default function App() {
             transport={transport}
             hotels={hotels}
             tickets={tickets}
+            globalSettings={globalSettings}
             userRole={userRole}
             agentCommission={currentAgent ? currentAgent.commission : 10}
             onNavigate={handleNavigate}
@@ -465,6 +831,7 @@ export default function App() {
             transport={transport}
             hotels={hotels}
             tickets={tickets}
+            globalSettings={globalSettings}
             userRole={userRole}
             agentCommission={currentAgent ? currentAgent.commission : 10}
             onNavigate={handleNavigate}
@@ -480,10 +847,26 @@ export default function App() {
             transport={transport}
             hotels={hotels}
             tickets={tickets}
+            globalSettings={globalSettings}
             userRole={userRole}
             agentCommission={currentAgent ? currentAgent.commission : 10}
             onNavigate={handleNavigate}
             imageMap={IMAGE_MAP}
+          />
+        )}
+
+        {/* Path: B2C MARKETPLACE BOOKING HUB (Viator, TripAdvisor, GetYourGuide, Klook & Trending) */}
+        {currentPath === '/marketplaces' && (
+          <MarketplaceBookingSection
+            settings={globalSettings}
+            packages={packages}
+            tickets={tickets}
+            hotels={hotels}
+            transport={transport}
+            imageMap={IMAGE_MAP}
+            currentAgent={currentAgent}
+            onNavigate={handleNavigate}
+            variant="page"
           />
         )}
 
@@ -495,6 +878,7 @@ export default function App() {
             transport={transport}
             hotels={hotels}
             tickets={tickets}
+            globalSettings={globalSettings}
             userRole={userRole}
             agentCommission={currentAgent ? currentAgent.commission : 10}
             onNavigate={handleNavigate}
@@ -513,13 +897,15 @@ export default function App() {
             onAddReview={rev => setReviews([...reviews, rev])}
             getNormalizedItem={getNormalizedItem}
             onNavigate={handleNavigate}
+            onBack={handleGoBack}
+            backLabel={getRouteLabel(navHistory[navHistory.length - 1]?.path || '/')}
             imageMap={IMAGE_MAP}
             showToast={showToast}
           />
         )}
 
         {/* Path: CHECKOUT FORM */}
-        {currentPath === '/checkout' && (
+        {currentPath === '/checkout' && routeParams.product && (
           <CheckoutForm
             product={routeParams.product}
             pax={routeParams.pax}
@@ -531,8 +917,11 @@ export default function App() {
             commission={routeParams.commission}
             userRole={userRole}
             currentUser={currentAgent}
+            bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
+            flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
             onConfirm={handleConfirmCheckout}
-            onCancel={() => handleNavigate('/package', { id: routeParams.product.id })}
+            onCancel={handleGoBack}
+            backLabel={getRouteLabel(navHistory[navHistory.length - 1]?.path || '/')}
             showToast={showToast}
           />
         )}
@@ -543,6 +932,8 @@ export default function App() {
             booking={routeParams.booking}
             product={routeParams.product}
             userRole={userRole}
+            bookingEmail={globalSettings.bookingEmail || 'booking@gfkholidays.com'}
+            flightsEmail={globalSettings.flightsEmail || 'flights@gfkholidays.com'}
             onNavigate={handleNavigate}
           />
         )}

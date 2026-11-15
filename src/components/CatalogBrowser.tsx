@@ -1,5 +1,8 @@
-import React, { useState, useMemo } from 'react';
-import { Package, TransportRoute, Hotel, Ticket } from '../types';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Package, TransportRoute, Hotel, Ticket, AvailableFlight, GlobalSettings, FlightInquiry } from '../types';
+import { DEFAULT_AVAILABLE_FLIGHTS } from '../data';
+import FlightFinderSection from './FlightFinderSection';
+import { useCurrencyRate } from '../lib/currency';
 import {
   MapPin,
   Star,
@@ -22,9 +25,6 @@ import {
   ChevronUp,
   Wifi,
   Waves,
-  FileText,
-  Sparkles,
-  QrCode,
   Info,
   DollarSign,
   Coffee,
@@ -33,19 +33,29 @@ import {
   Plus,
   Minus,
   Layers,
-  Palmtree
+  Palmtree,
+  UtensilsCrossed,
+  FileText,
+  QrCode,
+  Plane,
+  Flame,
+  ExternalLink
 } from 'lucide-react';
 
 interface CatalogBrowserProps {
-  viewType: 'packages' | 'transport' | 'hotels' | 'tickets' | 'restaurants' | 'cruises';
+  viewType: 'packages' | 'transport' | 'hotels' | 'tickets' | 'restaurants' | 'cruises' | 'flights';
   packages: Package[];
   transport: TransportRoute[];
   hotels: Hotel[];
   tickets: Ticket[];
+  globalSettings?: Partial<GlobalSettings>;
   userRole: 'guest' | 'customer' | 'agent' | 'admin';
   agentCommission: number;
   onNavigate: (path: string, params?: any) => void;
   imageMap: Record<string, string>;
+  onSubmitFlightInquiry?: (
+    inquiry: Omit<FlightInquiry, 'id' | 'status' | 'createdAt' | 'targetEmail'>
+  ) => Promise<FlightInquiry | null>;
 }
 
 export default function CatalogBrowser({
@@ -54,11 +64,60 @@ export default function CatalogBrowser({
   transport,
   hotels,
   tickets,
+  globalSettings,
   userRole,
   agentCommission,
   onNavigate,
-  imageMap
+  imageMap,
+  onSubmitFlightInquiry
 }: CatalogBrowserProps) {
+  const { currency, baseRates, fxConfig, formatPrice } = useCurrencyRate();
+
+  // Explicit helper converting base MYR pricing to INR using the admin-configured rate and +1 INR safety buffer
+  const convertMyrToInr = useCallback(
+    (myrAmount: number) => {
+      const safeMyr = Number(myrAmount) || 0;
+      const useManual = Boolean(globalSettings?.fxUseManualRate);
+      const manualRate = Number(globalSettings?.fxManualRateOverride);
+      const adminMarkupInr =
+        globalSettings?.fxMarkupInr !== undefined
+          ? Number(globalSettings.fxMarkupInr)
+          : fxConfig.markupInr ?? 1;
+      const adminMarkupPct =
+        globalSettings?.fxMarkupPercent !== undefined
+          ? Math.max(0, Number(globalSettings.fxMarkupPercent))
+          : fxConfig.markupPercent ?? 0;
+
+      const bufferedRate =
+        useManual && Number.isFinite(manualRate) && manualRate > 5
+          ? manualRate
+          : (Number(baseRates.INR) || 19.65) * (1 + adminMarkupPct / 100) +
+            (Number.isFinite(adminMarkupInr) ? adminMarkupInr : 1);
+
+      return Math.round(safeMyr * bufferedRate);
+    },
+    [
+      globalSettings?.fxUseManualRate,
+      globalSettings?.fxManualRateOverride,
+      globalSettings?.fxMarkupInr,
+      globalSettings?.fxMarkupPercent,
+      fxConfig.markupInr,
+      fxConfig.markupPercent,
+      baseRates.INR
+    ]
+  );
+
+  const formatCatalogPrice = useCallback(
+    (myrAmount: number) => {
+      const safeMyr = Number(myrAmount) || 0;
+      if (currency === 'INR') {
+        return `₹${convertMyrToInr(safeMyr).toLocaleString('en-IN')}`;
+      }
+      return formatPrice(safeMyr);
+    },
+    [currency, convertMyrToInr, formatPrice]
+  );
+
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDestination, setSelectedDestination] = useState('ALL');
@@ -69,6 +128,7 @@ export default function CatalogBrowser({
   const [selectedDuration, setSelectedDuration] = useState('ALL');
   const [selectedBudget, setSelectedBudget] = useState<'ALL' | 'budget' | 'mid' | 'luxury'>('ALL');
   const [selectedStyle, setSelectedStyle] = useState('ALL');
+  const [onlyTrending, setOnlyTrending] = useState(false);
   const [expandedItineraryId, setExpandedItineraryId] = useState<string | null>(null);
 
   // Self-Search & Custom Filters Drawer (Mobile & Desktop)
@@ -111,12 +171,67 @@ export default function CatalogBrowser({
   const [modalSlot, setModalSlot] = useState('10:00 AM');
 
   // Helper to adjust prices for logged B2B Agent
-  const getB2BRate = (basePrice: number) => {
-    if (userRole === 'agent') {
-      return Math.round(basePrice * (1 - agentCommission / 100));
+  const getB2BRate = useCallback(
+    (basePrice: number) => {
+      if (userRole === 'agent') {
+        return Math.round(basePrice * (1 - agentCommission / 100));
+      }
+      return basePrice;
+    },
+    [userRole, agentCommission]
+  );
+
+  const flightsList: AvailableFlight[] = useMemo(
+    () =>
+      Array.isArray(globalSettings?.availableFlights) && globalSettings.availableFlights.length > 0
+        ? globalSettings.availableFlights
+        : DEFAULT_AVAILABLE_FLIGHTS,
+    [globalSettings?.availableFlights]
+  );
+
+  // Dynamic Price Range Bounds computed from active catalog items (in base MYR)
+  const priceBounds = useMemo(() => {
+    let prices: number[] = [];
+    if (viewType === 'packages' || viewType === 'cruises') {
+      prices = packages.map((p) => getB2BRate(Number(p.base_price) || 0)).filter((n) => n > 0);
+    } else if (viewType === 'flights') {
+      prices = flightsList.map((f) => getB2BRate(Number(f.farePerPax) || 0)).filter((n) => n > 0);
+    } else if (viewType === 'hotels') {
+      prices = hotels.map((h) => getB2BRate(Number(h.price) || 0)).filter((n) => n > 0);
+    } else if (viewType === 'tickets' || viewType === 'restaurants') {
+      prices = tickets.map((t) => getB2BRate(Number(t.price) || 0)).filter((n) => n > 0);
+    } else if (viewType === 'transport') {
+      prices = transport.map((tr) => getB2BRate(Number(tr.car) || 0)).filter((n) => n > 0);
     }
-    return basePrice;
-  };
+
+    if (prices.length === 0) {
+      return { min: 0, max: 2000 };
+    }
+    const rawMin = Math.min(...prices);
+    const rawMax = Math.max(...prices);
+    const min = Math.max(0, Math.floor(rawMin / 10) * 10);
+    const max = Math.max(min + 50, Math.ceil(rawMax / 10) * 10);
+    return { min, max };
+  }, [viewType, packages, flightsList, hotels, tickets, transport, getB2BRate]);
+
+  const [priceRangeMin, setPriceRangeMin] = useState<number>(priceBounds.min);
+  const [priceRangeMax, setPriceRangeMax] = useState<number>(priceBounds.max);
+
+  useEffect(() => {
+    setPriceRangeMin(priceBounds.min);
+    setPriceRangeMax(priceBounds.max);
+  }, [viewType, priceBounds.min, priceBounds.max]);
+
+  const isPriceSliderActive =
+    priceRangeMin > priceBounds.min || priceRangeMax < priceBounds.max;
+
+  const matchesDynamicPrice = useCallback(
+    (baseAmount: number) => {
+      const effectivePrice = getB2BRate(Number(baseAmount) || 0);
+      return effectivePrice >= priceRangeMin && effectivePrice <= priceRangeMax;
+    },
+    [getB2BRate, priceRangeMin, priceRangeMax]
+  );
 
   const resolveImage = (keyOrUrl?: string, fallbackKey = 'kl') => {
     if (!keyOrUrl) return imageMap[fallbackKey] || imageMap.kl;
@@ -187,9 +302,11 @@ export default function CatalogBrowser({
       else if (selectedDuration === '6+') matchDur = p.duration_days >= 6;
 
       const matchBud = matchesBudget(p.base_price);
+      const matchSlider = matchesDynamicPrice(p.base_price);
       const matchSty = matchesStyle(p);
+      const matchTrending = !onlyTrending || Boolean(p.trending);
 
-      return matchSearch && matchLoc && matchDur && matchBud && matchSty;
+      return matchSearch && matchLoc && matchDur && matchBud && matchSlider && matchSty && matchTrending;
     });
 
     if (selectedSort === 'price_asc') {
@@ -201,7 +318,7 @@ export default function CatalogBrowser({
     }
 
     return result;
-  }, [packages, searchQuery, selectedDestination, selectedDuration, selectedBudget, selectedStyle, selectedSort]);
+  }, [packages, searchQuery, selectedDestination, selectedDuration, selectedBudget, selectedStyle, selectedSort, onlyTrending, matchesDynamicPrice]);
 
   // 2. Hotels Filter & Sort
   const hotelClasses = ['ALL', '5-Star', '4-Star', '3-Star', 'Resort', 'Regional'];
@@ -213,8 +330,10 @@ export default function CatalogBrowser({
         (h.location && h.location.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchLoc = matchesDest(h.location) || matchesDest(h.name);
       const matchBud = matchesBudget(h.price);
+      const matchSlider = matchesDynamicPrice(h.price);
       const matchSty = matchesStyle(h);
-      return matchClass && matchSearch && matchLoc && matchBud && matchSty;
+      const matchTrending = !onlyTrending || Boolean(h.trending);
+      return matchClass && matchSearch && matchLoc && matchBud && matchSlider && matchSty && matchTrending;
     });
 
     if (selectedSort === 'price_asc') {
@@ -226,7 +345,7 @@ export default function CatalogBrowser({
     }
 
     return result;
-  }, [hotels, selectedHotelClass, searchQuery, selectedDestination, selectedBudget, selectedStyle, selectedSort]);
+  }, [hotels, selectedHotelClass, searchQuery, selectedDestination, selectedBudget, selectedStyle, selectedSort, onlyTrending, matchesDynamicPrice]);
 
   // 3. Tickets Filter & Sort
   const filteredTickets = useMemo(() => {
@@ -236,8 +355,10 @@ export default function CatalogBrowser({
         (t.location && t.location.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchLoc = matchesDest(t.location) || matchesDest(t.name);
       const matchBud = matchesBudget(t.price);
+      const matchSlider = matchesDynamicPrice(t.price);
       const matchSty = matchesStyle(t);
-      return matchSearch && matchLoc && matchBud && matchSty;
+      const matchTrending = !onlyTrending || Boolean(t.trending);
+      return matchSearch && matchLoc && matchBud && matchSlider && matchSty && matchTrending;
     });
 
     if (selectedSort === 'price_asc') {
@@ -249,16 +370,18 @@ export default function CatalogBrowser({
     }
 
     return result;
-  }, [tickets, searchQuery, selectedDestination, selectedBudget, selectedStyle, selectedSort]);
+  }, [tickets, searchQuery, selectedDestination, selectedBudget, selectedStyle, selectedSort, onlyTrending, matchesDynamicPrice]);
 
   // 4. Transport Filter & Sort
   const filteredTransport = useMemo(() => {
     return transport.filter(t => {
       const matchSearch = t.name.toLowerCase().includes(searchQuery.toLowerCase());
       const matchLoc = matchesDest(t.name);
-      return matchSearch && matchLoc;
+      const matchSlider = matchesDynamicPrice(t.car);
+      const matchTrending = !onlyTrending || Boolean(t.trending);
+      return matchSearch && matchLoc && matchSlider && matchTrending;
     });
-  }, [transport, searchQuery, selectedDestination]);
+  }, [transport, searchQuery, selectedDestination, onlyTrending, matchesDynamicPrice]);
 
   // 5. Restaurants Filter & Sort
   const filteredRestaurants = useMemo(() => {
@@ -267,9 +390,11 @@ export default function CatalogBrowser({
       const matchSearch = combined.includes(searchQuery.toLowerCase());
       const matchLoc = matchesDest(t.location) || matchesDest(t.name);
       const matchBud = matchesBudget(t.price);
-      return matchSearch && matchLoc && matchBud;
+      const matchSlider = matchesDynamicPrice(t.price);
+      const matchTrending = !onlyTrending || Boolean(t.trending);
+      return matchSearch && matchLoc && matchBud && matchSlider && matchTrending;
     });
-  }, [tickets, searchQuery, selectedDestination, selectedBudget]);
+  }, [tickets, searchQuery, selectedDestination, selectedBudget, onlyTrending, matchesDynamicPrice]);
 
   // 6. Cruises Filter & Sort
   const filteredCruises = useMemo(() => {
@@ -278,9 +403,11 @@ export default function CatalogBrowser({
       const matchSearch = combined.includes(searchQuery.toLowerCase());
       const matchLoc = matchesDest(p.destination) || matchesDest(p.title);
       const matchBud = matchesBudget(p.base_price);
-      return matchSearch && matchLoc && matchBud;
+      const matchSlider = matchesDynamicPrice(p.base_price);
+      const matchTrending = !onlyTrending || Boolean(p.trending);
+      return matchSearch && matchLoc && matchBud && matchSlider && matchTrending;
     });
-  }, [packages, searchQuery, selectedDestination, selectedBudget]);
+  }, [packages, searchQuery, selectedDestination, selectedBudget, onlyTrending, matchesDynamicPrice]);
 
   // Direct checkout handlers
   const handleCheckoutPackage = (pkg: Package) => {
@@ -400,7 +527,9 @@ export default function CatalogBrowser({
     selectedBudget !== 'ALL' ||
     selectedStyle !== 'ALL' ||
     selectedHotelClass !== 'ALL' ||
-    selectedDuration !== 'ALL';
+    selectedDuration !== 'ALL' ||
+    onlyTrending ||
+    isPriceSliderActive;
 
   const resetAllCustomFilters = () => {
     setSearchQuery('');
@@ -409,89 +538,214 @@ export default function CatalogBrowser({
     setSelectedStyle('ALL');
     setSelectedHotelClass('ALL');
     setSelectedDuration('ALL');
+    setOnlyTrending(false);
     setSelectedSort('recommended');
+    setPriceRangeMin(priceBounds.min);
+    setPriceRangeMax(priceBounds.max);
+  };
+
+  const renderDynamicPriceRangeBar = () => {
+    const span = Math.max(1, priceBounds.max - priceBounds.min);
+    const minPct = Math.max(0, Math.min(100, ((priceRangeMin - priceBounds.min) / span) * 100));
+    const maxPct = Math.max(0, Math.min(100, ((priceRangeMax - priceBounds.min) / span) * 100));
+    const stepSize = span >= 1000 ? 25 : 10;
+
+    return (
+      <div className="bg-white border border-zinc-200 rounded-2xl p-3.5 sm:p-4 mb-4 sm:mb-6 shadow-xs space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-zinc-950">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Dynamic Price Range</span>
+            </span>
+            <span className="text-[11px] font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-lg tabular-nums">
+              {formatCatalogPrice(priceRangeMin)} – {formatCatalogPrice(priceRangeMax)}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {isPriceSliderActive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPriceRangeMin(priceBounds.min);
+                  setPriceRangeMax(priceBounds.max);
+                }}
+                className="text-[11px] font-bold text-rose-700 hover:underline px-1.5 cursor-pointer"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Dual-Handle Interactive Range Slider */}
+        <div className="pt-1 pb-0.5">
+          <div className="relative h-6 flex items-center">
+            <div className="w-full h-2 bg-zinc-200 rounded-full relative overflow-hidden">
+              <div
+                className="absolute top-0 bottom-0 bg-emerald-600 rounded-full"
+                style={{
+                  left: `${minPct}%`,
+                  right: `${100 - maxPct}%`
+                }}
+              />
+            </div>
+            <input
+              type="range"
+              min={priceBounds.min}
+              max={priceBounds.max}
+              step={stepSize}
+              value={priceRangeMin}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setPriceRangeMin(Math.min(val, priceRangeMax - stepSize));
+              }}
+              aria-label="Minimum price slider"
+              className="gfk-range-input absolute inset-0 w-full h-6 m-0"
+            />
+            <input
+              type="range"
+              min={priceBounds.min}
+              max={priceBounds.max}
+              step={stepSize}
+              value={priceRangeMax}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setPriceRangeMax(Math.max(val, priceRangeMin + stepSize));
+              }}
+              aria-label="Maximum price slider"
+              className="gfk-range-input absolute inset-0 w-full h-6 m-0"
+            />
+          </div>
+
+          <div className="flex items-center justify-between text-[10.5px] font-bold text-zinc-500 tabular-nums mt-0.5">
+            <span>Min: {formatCatalogPrice(priceBounds.min)}</span>
+            <span>Max: {formatCatalogPrice(priceBounds.max)}</span>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8 md:py-16 animate-fade-in w-full font-sans text-zinc-900">
       
       {/* =====================================================================
-          1. TOP NAVIGATION SERVICE TABS (MakeMyTrip / Cleartrip / Trip.com style)
+          1. TOP NAVIGATION SERVICE TABS
       ===================================================================== */}
-      <div className="bg-white rounded-2xl p-1.5 sm:p-2 shadow-xs border border-zinc-200 mb-4 sm:mb-6 flex items-center justify-between overflow-x-auto no-scrollbar gap-1.5 sm:gap-2">
-        <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="bg-white rounded-2xl p-1.5 border border-zinc-200 mb-3 sm:mb-6 flex items-center justify-between overflow-x-auto no-scrollbar gap-1.5">
+        <div className="flex items-center gap-1 sm:gap-1.5">
           <button
+            type="button"
             onClick={() => onNavigate('/search')}
-            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-black text-xs sm:text-sm whitespace-nowrap transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer ${
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
               viewType === 'packages'
-                ? 'bg-amber-500 text-white shadow-xs'
+                ? 'bg-zinc-950 text-white'
                 : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
             }`}
           >
-            <span>🌴</span>
-            <span>Holidays &amp; Packages</span>
-            <span className="bg-black/15 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-              {packages.length}
-            </span>
+            <Palmtree className="w-3.5 h-3.5 shrink-0" />
+            <span>Holidays · {packages.length}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => onNavigate('/tickets')}
-            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-black text-xs sm:text-sm whitespace-nowrap transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer ${
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
               viewType === 'tickets'
-                ? 'bg-purple-600 text-white shadow-xs'
+                ? 'bg-zinc-950 text-white'
                 : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
             }`}
           >
-            <TicketIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>Attraction Tickets</span>
-            <span className="bg-black/15 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-              {tickets.length}
-            </span>
+            <TicketIcon className="w-3.5 h-3.5 shrink-0" />
+            <span>Tickets · {tickets.length}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => onNavigate('/hotels')}
-            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-black text-xs sm:text-sm whitespace-nowrap transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer ${
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
               viewType === 'hotels'
-                ? 'bg-emerald-600 text-white shadow-xs'
+                ? 'bg-zinc-950 text-white'
                 : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
             }`}
           >
-            <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>Hotels &amp; Stays</span>
-            <span className="bg-black/15 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-              {hotels.length}
-            </span>
+            <Building2 className="w-3.5 h-3.5 shrink-0" />
+            <span>Hotels · {hotels.length}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => onNavigate('/transport')}
-            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-black text-xs sm:text-sm whitespace-nowrap transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer ${
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
               viewType === 'transport'
-                ? 'bg-blue-600 text-white shadow-xs'
+                ? 'bg-zinc-950 text-white'
                 : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
             }`}
           >
-            <Car className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>Private Fleet</span>
-            <span className="bg-black/15 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-              {transport.length}
-            </span>
+            <Car className="w-3.5 h-3.5 shrink-0" />
+            <span>Transfers · {transport.length}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('/restaurants')}
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
+              viewType === 'restaurants'
+                ? 'bg-zinc-950 text-white'
+                : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+            }`}
+          >
+            <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
+            <span>Dining</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('/cruises')}
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
+              viewType === 'cruises'
+                ? 'bg-zinc-950 text-white'
+                : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+            }`}
+          >
+            <Waves className="w-3.5 h-3.5 shrink-0" />
+            <span>Cruises</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('/flights')}
+            className={`px-3 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
+              viewType === 'flights'
+                ? 'bg-zinc-950 text-white'
+                : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+            }`}
+          >
+            <Plane className="w-3.5 h-3.5 shrink-0" />
+            <span>Flights · {(globalSettings?.availableFlights?.length || DEFAULT_AVAILABLE_FLIGHTS.length)}</span>
           </button>
         </div>
 
-        {userRole === 'agent' && (
-          <span className="bg-indigo-50 border border-indigo-200 text-indigo-700 font-extrabold text-[11px] sm:text-xs px-2.5 py-1 sm:py-1.5 rounded-xl shrink-0">
+      {userRole === 'agent' && (
+          <span className="text-emerald-700 font-bold text-[11px] sm:text-xs px-2.5 py-1 shrink-0 whitespace-nowrap">
             Agent Net Rates ({agentCommission}% Off)
           </span>
         )}
       </div>
 
       {/* =====================================================================
-          2A. PHONE VIEW OPTIMIZED SEARCH & CUSTOM PRIVILEGE CONSOLE (MOBILE ONLY)
-          (Replaces the oversized black box on phone screens with compact OTA controls)
+          1B. DYNAMIC PRICE RANGE SLIDER BAR
+          (Active on Holidays, Available Flights, Hotels, Tickets & Transfers)
       ===================================================================== */}
+      {renderDynamicPriceRangeBar()}
+
+      {/* =====================================================================
+          2A. PHONE VIEW OPTIMIZED SEARCH & CUSTOM PRIVILEGE CONSOLE (MOBILE ONLY)
+          (Strictly hidden on Flights view — FlightFinderSection provides flight search)
+      ===================================================================== */}
+      {viewType !== 'flights' && (
       <div className="md:hidden bg-white border border-zinc-200/90 rounded-2xl p-3 shadow-xs mb-4">
         {/* Row 1: Search Input with Instant Clear & Filter Drawer Toggle */}
         <div className="flex items-center gap-2">
@@ -544,10 +798,10 @@ export default function CatalogBrowser({
           <button
             type="button"
             onClick={() => setIsCustomTripModalOpen(true)}
-            className="py-1.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white rounded-lg text-[11px] font-extrabold flex items-center gap-1 shadow-xs cursor-pointer shrink-0"
+            className="py-1.5 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-xs cursor-pointer shrink-0"
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Build Custom Trip</span>
+            <Compass className="w-3.5 h-3.5" />
+            <span>Custom Trip</span>
           </button>
         </div>
 
@@ -626,9 +880,9 @@ export default function CatalogBrowser({
               <div className="grid grid-cols-4 gap-1.5">
                 {[
                   { id: 'ALL', label: 'Any' },
-                  { id: 'budget', label: '< RM200' },
-                  { id: 'mid', label: '200-500' },
-                  { id: 'luxury', label: 'RM500+' }
+                  { id: 'budget', label: `< ${formatCatalogPrice(200)}` },
+                  { id: 'mid', label: `${formatCatalogPrice(200)}-${formatCatalogPrice(500)}` },
+                  { id: 'luxury', label: `${formatCatalogPrice(500)}+` }
                 ].map((b) => (
                   <button
                     key={b.id}
@@ -709,6 +963,19 @@ export default function CatalogBrowser({
         {/* Row 4: Category Specific Filters & Sorter */}
         <div className="flex items-center justify-between gap-2 pt-2 mt-2 border-t border-zinc-100 text-xs">
           <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+            <button
+              type="button"
+              onClick={() => setOnlyTrending((prev) => !prev)}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap inline-flex items-center gap-1 transition-all cursor-pointer ${
+                onlyTrending
+                  ? 'bg-amber-400 text-zinc-950'
+                  : 'bg-zinc-100 text-zinc-700'
+              }`}
+            >
+              <Flame className="w-3 h-3 shrink-0" />
+              <span>Trending</span>
+            </button>
+
             {viewType === 'hotels' && (
               hotelClasses.slice(0, 4).map(c => (
                 <button
@@ -779,15 +1046,16 @@ export default function CatalogBrowser({
           )}
         </div>
       </div>
+      )}
 
       {/* =====================================================================
-          2B. DESKTOP VIEW CONTROL BAR (Enhanced with Self-Search Privilege)
+          2B. DESKTOP VIEW CONTROL BAR (Strictly hidden on Flights view)
       ===================================================================== */}
+      {viewType !== 'flights' && (
       <div className="hidden md:block bg-zinc-950 text-white rounded-3xl p-6 mb-8 border border-zinc-800 shadow-xl">
         <div className="flex items-center justify-between gap-4 mb-5">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
                 100% Direct Malaysia Tourism Supplier
               </span>
@@ -807,9 +1075,9 @@ export default function CatalogBrowser({
             <button
               type="button"
               onClick={() => setIsCustomTripModalOpen(true)}
-              className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center gap-2 cursor-pointer transition-all"
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center gap-2 cursor-pointer transition-colors"
             >
-              <Sparkles className="w-4 h-4" />
+              <Compass className="w-4 h-4" />
               <span>Design Custom Trip</span>
             </button>
 
@@ -895,14 +1163,28 @@ export default function CatalogBrowser({
               </div>
             )}
 
+            {/* Trending Only Toggle */}
+            <button
+              type="button"
+              onClick={() => setOnlyTrending((prev) => !prev)}
+              className={`px-3 py-1 rounded-lg text-xs font-extrabold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
+                onlyTrending
+                  ? 'bg-amber-400 text-zinc-950'
+                  : 'bg-zinc-900 text-amber-300 border border-zinc-800 hover:border-amber-400/60'
+              }`}
+            >
+              <Flame className="w-3.5 h-3.5 shrink-0" />
+              <span>Trending Only</span>
+            </button>
+
             {/* Budget filter */}
             <div className="flex items-center gap-1.5">
               <span className="text-zinc-400 font-bold">Budget:</span>
               {[
                 { id: 'ALL', label: 'Any' },
-                { id: 'budget', label: '< RM 200' },
-                { id: 'mid', label: 'RM 200 - 500' },
-                { id: 'luxury', label: 'RM 500+' }
+                { id: 'budget', label: `< ${formatCatalogPrice(200)}` },
+                { id: 'mid', label: `${formatCatalogPrice(200)} - ${formatCatalogPrice(500)}` },
+                { id: 'luxury', label: `${formatCatalogPrice(500)}+` }
               ].map(b => (
                 <button
                   key={b.id}
@@ -935,40 +1217,37 @@ export default function CatalogBrowser({
           </div>
         </div>
       </div>
+      )}
 
       {/* =====================================================================
-          3. HOLIDAYS & TOUR PACKAGES PAGE (MakeMyTrip / Cleartrip / Trip.com style)
+          3. HOLIDAYS & TOUR PACKAGES PAGE (Systematic Mobile Cards + Full Desktop View)
       ===================================================================== */}
       {viewType === 'packages' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-zinc-500 uppercase tracking-wider">
-              Showing {filteredPackages.length} Malaysia Holiday Packages
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-bold text-zinc-600 tabular-nums">
+              {filteredPackages.length} Malaysia Holiday Packages
             </span>
-            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">
-              Full Day-by-Day Itineraries &amp; T&amp;Cs Available
+            <span className="text-[11px] font-semibold text-emerald-700">
+              Itineraries &amp; Transfers Included
             </span>
           </div>
 
           {filteredPackages.length === 0 ? (
-            <div className="text-center py-20 bg-white rounded-3xl border border-zinc-200 p-8 shadow-xs">
-              <Compass className="w-12 h-12 text-zinc-300 mx-auto mb-3" />
-              <h3 className="text-lg font-black text-zinc-900">No holiday packages match your filters</h3>
+            <div className="text-center py-16 bg-white rounded-2xl border border-zinc-200 p-6">
+              <Compass className="w-10 h-10 text-zinc-300 mx-auto mb-2.5" />
+              <h3 className="text-base font-extrabold text-zinc-900">No holiday packages match your filters</h3>
               <p className="text-zinc-500 text-xs mt-1">Try resetting destination or duration filters</p>
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedDestination('ALL');
-                  setSelectedDuration('ALL');
-                  setSearchQuery('');
-                }}
+                onClick={resetAllCustomFilters}
                 className="mt-4 px-4 py-2 bg-zinc-950 text-white rounded-xl text-xs font-bold cursor-pointer"
               >
                 Reset All Filters
               </button>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-3 sm:gap-4">
               {filteredPackages.map((pkg) => {
                 const img = resolveImage(pkg.image, 'langkawi');
                 const displayPrice = getB2BRate(pkg.base_price);
@@ -978,55 +1257,69 @@ export default function CatalogBrowser({
                 return (
                   <div
                     key={pkg.id}
-                    className="bg-white rounded-3xl border border-zinc-200/90 hover:border-amber-500/50 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col lg:flex-row"
+                    className="bg-white rounded-2xl border border-zinc-200 hover:border-emerald-600/60 transition-colors overflow-hidden flex flex-col lg:flex-row"
                   >
-                    {/* Media Column */}
-                    <div className="relative w-full lg:w-72 h-52 lg:h-auto shrink-0 bg-zinc-950">
+                    {/* Media Column (Compact on Mobile, Full Column on Desktop) */}
+                    <div
+                      onClick={() => {
+                        setActivePackageModal(pkg);
+                        setModalTab('options');
+                      }}
+                      className="relative w-full lg:w-72 h-40 lg:h-auto shrink-0 bg-zinc-950 cursor-pointer"
+                    >
                       <img
                         src={img}
                         alt={pkg.title}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
-                      <div className="absolute top-3 left-3 bg-zinc-950/85 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
-                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                        <span>{pkg.rating || 4.9}</span>
-                        <span className="text-zinc-400">({pkg.reviews || 240})</span>
-                      </div>
-                      <div className="absolute top-3 right-3 bg-amber-500 text-zinc-950 font-black text-[10px] px-2 py-0.5 rounded shadow-sm">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent" />
+                      {pkg.trending && (
+                        <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-[10px] font-extrabold">
+                          <Flame className="w-3 h-3 shrink-0" />
+                          Trending
+                        </span>
+                      )}
+                      <div className="absolute top-2.5 right-2.5 bg-zinc-950/85 text-white font-bold text-[10px] px-2 py-0.5 rounded-md tabular-nums">
                         {pkg.duration_days}D/{pkg.duration_days - 1}N
                       </div>
-                      <div className="absolute bottom-3 left-3 bg-black/75 text-white text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1">
-                        <MapPin className="w-3 h-3 text-emerald-400" />
-                        <span>{pkg.destination}</span>
+                      <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between text-[11px] text-white font-semibold">
+                        <span className="flex items-center gap-1 truncate">
+                          <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                          <span className="truncate">{pkg.destination}</span>
+                        </span>
+                        <span className="flex items-center gap-1 shrink-0 ml-2 tabular-nums">
+                          <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                          <span>{pkg.rating || 4.9}</span>
+                          <span className="text-zinc-300 text-[10px]">({pkg.reviews || 240})</span>
+                        </span>
                       </div>
                     </div>
 
                     {/* Middle Info Column */}
-                    <div className="p-4 sm:p-6 flex-1 flex flex-col justify-between">
+                    <div className="p-3.5 sm:p-5 flex-1 flex flex-col justify-between">
                       <div>
-                        <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                          {pkg.tags.map((t, idx) => (
-                            <span key={idx} className="bg-zinc-100 text-zinc-700 text-[10px] font-extrabold px-2 py-0.5 rounded-md">
-                              {t}
-                            </span>
-                          ))}
-                          <span className="bg-emerald-50 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-md flex items-center gap-1">
-                            <Check className="w-3 h-3 text-emerald-600" />
-                            Transfers Included
-                          </span>
+                        {/* Quiet Unboxed Metadata */}
+                        <div className="text-[11px] font-semibold text-emerald-700 mb-1 truncate">
+                          Guided Tour · Hotel &amp; Transfers Included
                         </div>
 
-                        <h2 className="text-base sm:text-xl font-black text-zinc-950 leading-snug">
+                        <h2
+                          onClick={() => {
+                            setActivePackageModal(pkg);
+                            setModalTab('options');
+                          }}
+                          className="text-sm sm:text-lg font-extrabold text-zinc-950 leading-snug line-clamp-2 cursor-pointer hover:text-emerald-700 transition-colors"
+                        >
                           {pkg.title}
                         </h2>
 
-                        <p className="text-xs text-zinc-600 font-medium leading-relaxed mt-1 line-clamp-2">
+                        <p className="text-xs text-zinc-600 leading-relaxed mt-1 line-clamp-2">
                           {pkg.description}
                         </p>
 
-                        {/* Inclusions Strip (MakeMyTrip style) */}
-                        <div className="mt-3 py-2 px-3 bg-zinc-50 border border-zinc-100 rounded-xl grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-semibold text-zinc-700">
+                        {/* Clean Desktop Inclusions Line (Hidden on Mobile to prevent card bloat) */}
+                        <div className="hidden sm:grid mt-3 py-2 px-3 bg-zinc-50 border border-zinc-200/70 rounded-xl grid-cols-4 gap-2 text-[11px] font-semibold text-zinc-700">
                           <div className="flex items-center gap-1.5">
                             <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                             <span>Hotel Stay</span>
@@ -1045,27 +1338,27 @@ export default function CatalogBrowser({
                           </div>
                         </div>
 
-                        {/* Day-by-Day Accordion Toggle */}
+                        {/* Desktop Day-by-Day Accordion (Mobile uses systematic bottom sheet) */}
                         {pkg.itinerary && pkg.itinerary.length > 0 && (
-                          <div className="mt-3">
+                          <div className="hidden sm:block mt-3">
                             <button
                               type="button"
                               onClick={() => setExpandedItineraryId(isExpanded ? null : pkg.id)}
-                              className="text-xs font-bold text-amber-700 hover:text-amber-800 flex items-center gap-1 cursor-pointer"
+                              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
                             >
                               <span>{isExpanded ? 'Hide Day-by-Day Breakdown' : `Preview ${pkg.itinerary.length}-Day Itinerary Breakdown`}</span>
                               {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                             </button>
 
                             {isExpanded && (
-                              <div className="mt-2.5 p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-2xl space-y-2.5 animate-fade-in text-xs">
+                              <div className="mt-2.5 p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-2 animate-fade-in text-xs">
                                 {pkg.itinerary.map((day, idx) => (
                                   <div key={idx} className="flex items-start gap-2.5">
-                                    <span className="w-5 h-5 rounded-full bg-amber-500 text-zinc-950 font-black text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                                    <span className="w-5 h-5 rounded-full bg-zinc-900 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5 tabular-nums">
                                       {day.day || idx + 1}
                                     </span>
                                     <div>
-                                      <h4 className="font-extrabold text-zinc-900">{day.title}</h4>
+                                      <h4 className="font-bold text-zinc-900">{day.title}</h4>
                                       <p className="text-[11px] text-zinc-600 mt-0.5 leading-relaxed">{day.activities}</p>
                                     </div>
                                   </div>
@@ -1076,33 +1369,58 @@ export default function CatalogBrowser({
                         )}
                       </div>
 
-                      {/* Terms & Conditions preview note */}
-                      <div className="mt-3 pt-3 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
-                        <span className="flex items-center gap-1 text-emerald-700 font-semibold">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          {pkg.termsAndConditions ? 'Flexible Cancellation & Local DMC Guarantee' : '100% Verified Local Operator'}
-                        </span>
-                        <span className="text-zinc-400">
-                          {pkg.childPolicy || 'Child discounts available'}
-                        </span>
+                      {/* Mobile Compact Price & Action Row */}
+                      <div className="lg:hidden mt-3 pt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2">
+                        <div className="tabular-nums">
+                          <span className="text-[10px] text-zinc-400 line-through block leading-none">
+                            {formatCatalogPrice(Number(origPrice) || 0)}
+                          </span>
+                          <div className="text-base font-extrabold text-zinc-950 leading-tight mt-0.5">
+                            {formatCatalogPrice(Number(displayPrice) || 0)}
+                            <span className="text-[10px] font-normal text-zinc-500"> /pax</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActivePackageModal(pkg);
+                              setModalTab('options');
+                            }}
+                            className="px-2.5 py-2 rounded-xl border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-zinc-800 text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                          >
+                            Itinerary
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActivePackageModal(pkg);
+                              setModalTab('options');
+                            }}
+                            className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] py-2 px-3 rounded-xl cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                          >
+                            <span>Book Tour</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Right Pricing & Quick Book Column */}
-                    <div className="p-4 sm:p-6 bg-zinc-50 border-t lg:border-t-0 lg:border-l border-zinc-200/80 w-full lg:w-64 shrink-0 flex flex-col justify-between">
-                      <div>
-                        <div className="text-left lg:text-right">
-                          <span className="text-xs text-zinc-400 line-through font-semibold block">
-                            RM {(Number(origPrice) || 0).toLocaleString()}
-                          </span>
-                          <div className="text-2xl font-black text-zinc-950 tracking-tight leading-none mt-0.5">
-                            RM {(Number(displayPrice) || 0).toLocaleString()}
-                          </div>
-                          <span className="text-[11px] text-zinc-500 font-medium">per person (twin-sharing)</span>
+                    {/* Desktop Right Pricing & Quick Book Column */}
+                    <div className="hidden lg:flex p-6 bg-zinc-50 border-l border-zinc-200/80 w-64 shrink-0 flex-col justify-between">
+                      <div className="text-right tabular-nums">
+                        <span className="text-xs text-zinc-400 line-through font-semibold block">
+                          {formatCatalogPrice(Number(origPrice) || 0)}
+                        </span>
+                        <div className="text-2xl font-black text-zinc-950 tracking-tight leading-none mt-0.5">
+                          {formatCatalogPrice(Number(displayPrice) || 0)}
                         </div>
-
-                        <div className="mt-3 bg-emerald-100/70 border border-emerald-300 text-emerald-900 text-[10px] font-extrabold px-2.5 py-1 rounded-lg text-center">
-                          Includes All Sightseeing &amp; Hotel
+                        <span className="text-[11px] text-zinc-500 font-medium block">
+                          per person
+                        </span>
+                        <div className="mt-2 text-[11px] font-semibold text-emerald-700">
+                          Sightseeing, Hotel &amp; Cabs
                         </div>
                       </div>
 
@@ -1113,7 +1431,7 @@ export default function CatalogBrowser({
                             setActivePackageModal(pkg);
                             setModalTab('options');
                           }}
-                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs py-2.5 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                          className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                         >
                           <span>Select Dates &amp; Book</span>
                           <ArrowRight className="w-3.5 h-3.5" />
@@ -1125,10 +1443,10 @@ export default function CatalogBrowser({
                               setCustomTripDest(pkg.destination || 'Kuala Lumpur');
                               setIsCustomTripModalOpen(true);
                             }}
-                            className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-extrabold text-[11px] py-1.5 px-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1"
+                            className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-bold text-[11px] py-1.5 px-2 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1"
                             title="Customize this itinerary with your own dates and hotel"
                           >
-                            <Sparkles className="w-3 h-3 text-emerald-600" />
+                            <Compass className="w-3 h-3 text-emerald-700" />
                             <span>Customize</span>
                           </button>
                           <button
@@ -1137,7 +1455,7 @@ export default function CatalogBrowser({
                               setActivePackageModal(pkg);
                               setModalTab('terms');
                             }}
-                            className="bg-white hover:bg-zinc-100 border border-zinc-200 text-zinc-700 font-extrabold text-[11px] py-1.5 px-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1"
+                            className="bg-white hover:bg-zinc-100 border border-zinc-200 text-zinc-700 font-bold text-[11px] py-1.5 px-2 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1"
                           >
                             <FileText className="w-3 h-3 text-zinc-500" />
                             <span>Policies</span>
@@ -1154,21 +1472,21 @@ export default function CatalogBrowser({
       )}
 
       {/* =====================================================================
-          4. ATTRACTION TICKETS PAGE (Trip.com / MakeMyTrip style)
+          4. ATTRACTION TICKETS PAGE (Systematic Mobile + Desktop Cards)
       ===================================================================== */}
       {viewType === 'tickets' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-zinc-500 uppercase tracking-wider">
-              Showing {filteredTickets.length} Attraction Tickets &amp; E-Passes
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-bold text-zinc-600 tabular-nums">
+              {filteredTickets.length} Attraction Tickets &amp; E-Passes
             </span>
-            <span className="text-xs font-bold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-full flex items-center gap-1">
+            <span className="text-[11px] font-semibold text-purple-700 flex items-center gap-1">
               <QrCode className="w-3.5 h-3.5" />
-              <span>Instant Gate Turnstile Barcode Scan</span>
+              <span>Instant Gate QR</span>
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5">
             {filteredTickets.map((tk) => {
               const img = resolveImage(tk.image, 'petronas');
               const displayPrice = getB2BRate(tk.price);
@@ -1178,79 +1496,94 @@ export default function CatalogBrowser({
               return (
                 <div
                   key={tk.id}
-                  className="bg-white rounded-3xl border border-zinc-200/90 hover:border-purple-500/50 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
+                  className="bg-white rounded-2xl border border-zinc-200 hover:border-purple-500/60 transition-colors overflow-hidden flex flex-col justify-between"
                 >
                   <div>
-                    {/* Image Banner with Gate QR Badges */}
-                    <div className="relative h-48 bg-zinc-950 overflow-hidden">
+                    <div
+                      onClick={() => {
+                        setActiveTicketModal(tk);
+                        setModalTab('options');
+                        setModalSelectedVariantIdx(0);
+                      }}
+                      className="relative h-36 sm:h-44 bg-zinc-950 overflow-hidden cursor-pointer"
+                    >
                       <img
                         src={img}
                         alt={tk.name}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
-                      <div className="absolute top-3 left-3 bg-purple-950/85 backdrop-blur-xs text-purple-200 border border-purple-700/60 text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1">
-                        <QrCode className="w-3 h-3 text-purple-400" />
-                        <span>Instant Gate QR</span>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent" />
+                      {tk.trending && (
+                        <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-[10px] font-extrabold">
+                          <Flame className="w-3 h-3 shrink-0" />
+                          Trending
+                        </span>
+                      )}
+                      <div className="absolute top-2.5 right-2.5 bg-zinc-950/85 text-white text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums flex items-center gap-1">
+                        <QrCode className="w-3 h-3 text-purple-300" />
+                        <span>Gate QR</span>
                       </div>
-                      <div className="absolute top-3 right-3 bg-white/95 text-zinc-900 text-[10px] font-bold px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1">
-                        <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
-                        <span>{tk.rating || 4.8}</span>
-                        <span className="text-zinc-400">({tk.reviews || 420})</span>
-                      </div>
-                      <div className="absolute bottom-3 left-3 bg-black/75 text-white text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1">
-                        <MapPin className="w-3 h-3 text-emerald-400" />
-                        <span>{tk.location || 'Malaysia'}</span>
+                      <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between text-[11px] text-white font-semibold">
+                        <span className="flex items-center gap-1 truncate">
+                          <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                          <span className="truncate">{tk.location || 'Malaysia'}</span>
+                        </span>
+                        <span className="flex items-center gap-1 shrink-0 ml-2 tabular-nums">
+                          <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                          <span>{tk.rating || 4.8}</span>
+                          <span className="text-zinc-300 text-[10px]">({tk.reviews || 420})</span>
+                        </span>
                       </div>
                     </div>
 
-                    {/* Content Section */}
-                    <div className="p-5">
-                      <h3 className="font-black text-base text-zinc-950 leading-snug line-clamp-2">
+                    <div className="p-3.5 sm:p-4">
+                      <div className="text-[11px] font-semibold text-purple-700 mb-1 truncate">
+                        Instant Turnstile Entry · {tk.info || 'Valid 90 Days'}
+                      </div>
+                      <h3
+                        onClick={() => {
+                          setActiveTicketModal(tk);
+                          setModalTab('options');
+                          setModalSelectedVariantIdx(0);
+                        }}
+                        className="font-extrabold text-sm sm:text-base text-zinc-950 leading-snug line-clamp-2 cursor-pointer hover:text-purple-700"
+                      >
                         {tk.name}
                       </h3>
 
-                      {/* Timings & Operational Info */}
-                      <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-600 font-semibold">
+                      <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
                         <Clock className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
                         <span className="truncate">{tk.timings || tk.addInfo || 'Daily 09:00 AM - 09:00 PM'}</span>
                       </div>
 
-                      {/* Variants Preview Box (MakeMyTrip / Trip.com style) */}
-                      <div className="mt-3 p-3 bg-zinc-50 border border-zinc-200/80 rounded-2xl space-y-1.5">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">
-                          Available Ticket Options &amp; Rates:
+                      {/* Desktop Option Preview Table (Hidden on Mobile to prevent congestion) */}
+                      <div className="hidden sm:block mt-3 p-2.5 bg-zinc-50 border border-zinc-200/70 rounded-xl space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                          Available Ticket Tiers
                         </span>
                         {(hasVariants ? tk.ticketCategories! : [
                           { name: 'Standard Gate Pass', price: tk.price, description: 'Direct turnstile entry' }
-                        ]).slice(0, 3).map((cat, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs py-0.5 border-b border-zinc-100 last:border-0">
-                            <span className="font-bold text-zinc-800 truncate pr-2">{cat.name}</span>
-                            <span className="font-black text-purple-700 shrink-0">RM {getB2BRate(cat.price)}</span>
+                        ]).slice(0, 2).map((cat, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs py-0.5">
+                            <span className="font-semibold text-zinc-800 truncate pr-2">{cat.name}</span>
+                            <span className="font-bold text-purple-700 shrink-0 tabular-nums">
+                              {formatCatalogPrice(Number(getB2BRate(cat.price)) || 0)}
+                            </span>
                           </div>
                         ))}
-                      </div>
-
-                      {/* Cancellation & T&C Pill */}
-                      <div className="mt-3 flex items-center justify-between text-[10.5px]">
-                        <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          {tk.info || 'Valid 90 Days'}
-                        </span>
-                        <span className="text-zinc-400 font-medium">Turnstile Barcode</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Card Footer & Action */}
-                  <div className="p-5 pt-3 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-zinc-400 line-through font-semibold block leading-none">
-                        RM {origPrice}
+                  <div className="p-3.5 sm:p-4 pt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2">
+                    <div className="tabular-nums">
+                      <span className="text-[10px] text-zinc-400 line-through block leading-none">
+                        {formatCatalogPrice(Number(origPrice) || 0)}
                       </span>
-                      <div className="text-xl font-black text-zinc-950 leading-none mt-1">
-                        RM {displayPrice}
-                        <span className="text-[10px] font-normal text-zinc-400"> /pass</span>
+                      <div className="text-base sm:text-lg font-extrabold text-zinc-950 leading-tight mt-0.5">
+                        {formatCatalogPrice(Number(displayPrice) || 0)}
+                        <span className="text-[10px] font-normal text-zinc-500"> /pass</span>
                       </div>
                     </div>
 
@@ -1261,8 +1594,7 @@ export default function CatalogBrowser({
                           setActiveTicketModal(tk);
                           setModalTab('terms');
                         }}
-                        className="bg-white hover:bg-zinc-100 border border-zinc-200 text-zinc-700 font-bold text-xs py-2 px-2.5 rounded-xl cursor-pointer"
-                        title="View Terms & Conditions"
+                        className="bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 text-zinc-700 font-bold text-[11px] py-2 px-2.5 rounded-xl cursor-pointer whitespace-nowrap"
                       >
                         T&amp;Cs
                       </button>
@@ -1273,9 +1605,9 @@ export default function CatalogBrowser({
                           setModalTab('options');
                           setModalSelectedVariantIdx(0);
                         }}
-                        className="bg-purple-600 hover:bg-purple-500 text-white font-black text-xs py-2 px-3 rounded-xl shadow-md transition-all flex items-center gap-1 cursor-pointer"
+                        className="bg-purple-700 hover:bg-purple-800 text-white font-bold text-[11px] sm:text-xs py-2 px-3 rounded-xl transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap"
                       >
-                        <span>Select Option</span>
+                        <span>Select Pass</span>
                         <ArrowRight className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -1288,20 +1620,20 @@ export default function CatalogBrowser({
       )}
 
       {/* =====================================================================
-          5. HOTELS & STAYS PAGE (MakeMyTrip / Akbar Travels style)
+          5. HOTELS & STAYS PAGE (Systematic Mobile + Desktop Cards)
       ===================================================================== */}
       {viewType === 'hotels' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-zinc-500 uppercase tracking-wider">
-              Showing {filteredHotels.length} Contracted Hotels &amp; Resorts
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-bold text-zinc-600 tabular-nums">
+              {filteredHotels.length} Contracted Hotels &amp; Resorts
             </span>
-            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">
-              Guaranteed Direct Allotments · Free Cancellation Available
+            <span className="text-[11px] font-semibold text-emerald-700">
+              Direct Allotments · Instant Rooms
             </span>
           </div>
 
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-3 sm:gap-4">
             {filteredHotels.map((ht) => {
               const img = resolveImage(ht.image, 'hotel');
               const displayPrice = getB2BRate(ht.price);
@@ -1310,104 +1642,147 @@ export default function CatalogBrowser({
               return (
                 <div
                   key={ht.id}
-                  className="bg-white rounded-3xl border border-zinc-200/90 hover:border-emerald-500/50 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col md:flex-row"
+                  className="bg-white rounded-2xl border border-zinc-200 hover:border-emerald-600/60 transition-colors overflow-hidden flex flex-col lg:flex-row"
                 >
                   {/* Hotel Photo */}
-                  <div className="relative w-full md:w-80 h-52 md:h-auto shrink-0 bg-zinc-950">
+                  <div
+                    onClick={() => {
+                      setActiveHotelModal(ht);
+                      setModalTab('options');
+                      setModalSelectedVariantIdx(0);
+                    }}
+                    className="relative w-full lg:w-72 h-40 lg:h-auto shrink-0 bg-zinc-950 cursor-pointer"
+                  >
                     <img
                       src={img}
                       alt={ht.name}
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                     />
-                    <div className="absolute top-3 left-3 bg-zinc-950/85 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
-                      <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                      <span>{ht.rating || 4.7}</span>
-                      <span className="text-zinc-400">({ht.reviews || 290})</span>
-                    </div>
-                    <div className="absolute top-3 right-3 bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded">
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent" />
+                    {ht.trending && (
+                      <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-[10px] font-extrabold">
+                        <Flame className="w-3 h-3 shrink-0" />
+                        Trending
+                      </span>
+                    )}
+                    <div className="absolute top-2.5 right-2.5 bg-zinc-950/85 text-white text-[10px] font-bold px-2 py-0.5 rounded-md">
                       {ht.cat || 'Direct Contract'}
                     </div>
-                    <div className="absolute bottom-3 left-3 bg-black/75 text-white text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1">
-                      <MapPin className="w-3 h-3 text-emerald-400" />
-                      <span>{ht.location || 'Malaysia'}</span>
+                    <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between text-[11px] text-white font-semibold">
+                      <span className="flex items-center gap-1 truncate">
+                        <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                        <span className="truncate">{ht.location || 'Malaysia'}</span>
+                      </span>
+                      <span className="flex items-center gap-1 shrink-0 ml-2 tabular-nums">
+                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                        <span>{ht.rating || 4.7}</span>
+                        <span className="text-zinc-300 text-[10px]">({ht.reviews || 290})</span>
+                      </span>
                     </div>
                   </div>
 
                   {/* Hotel Details & Room Options */}
-                  <div className="p-4 sm:p-6 flex-1 flex flex-col justify-between">
+                  <div className="p-3.5 sm:p-5 flex-1 flex flex-col justify-between">
                     <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
-                          {ht.contractBadge || 'Direct DMC Allotment'}
-                        </span>
-                        <span className="text-[10px] text-zinc-400">•</span>
-                        <span className="text-[11px] font-bold text-zinc-500">
-                          {ht.timings || 'Check-in: 3:00 PM | Check-out: 12:00 PM'}
-                        </span>
+                      <div className="text-[11px] font-semibold text-emerald-700 mb-1 truncate">
+                        {ht.contractBadge || 'Direct DMC Allotment'} · {ht.timings || 'Check-in 3:00 PM'}
                       </div>
 
-                      <h2 className="text-lg sm:text-xl font-black text-zinc-950 leading-snug">
+                      <h2
+                        onClick={() => {
+                          setActiveHotelModal(ht);
+                          setModalTab('options');
+                          setModalSelectedVariantIdx(0);
+                        }}
+                        className="text-sm sm:text-lg font-extrabold text-zinc-950 leading-snug line-clamp-2 cursor-pointer hover:text-emerald-700"
+                      >
                         {ht.name}
                       </h2>
 
-                      {/* Amenities Icons Strip */}
-                      <div className="flex flex-wrap items-center gap-3 mt-2 text-xs font-semibold text-zinc-600">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-[11px] font-medium text-zinc-600">
                         <span className="flex items-center gap-1">
-                          <Wifi className="w-3.5 h-3.5 text-emerald-600" /> Free WiFi
+                          <Wifi className="w-3 h-3 text-emerald-600" /> Free WiFi
                         </span>
                         <span className="flex items-center gap-1">
-                          <Waves className="w-3.5 h-3.5 text-blue-600" /> Swimming Pool
+                          <Waves className="w-3 h-3 text-blue-600" /> Pool
                         </span>
                         <span className="flex items-center gap-1">
-                          <Coffee className="w-3.5 h-3.5 text-amber-600" /> Breakfast Available
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Shield className="w-3.5 h-3.5 text-cyan-600" /> 24/7 Security
+                          <Coffee className="w-3 h-3 text-amber-600" /> Breakfast Option
                         </span>
                       </div>
 
-                      {/* Room Categories preview (MakeMyTrip style) */}
-                      <div className="mt-3 p-3 bg-zinc-50 border border-zinc-200/70 rounded-2xl space-y-1.5">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">
-                          Contracted Room Categories:
+                      {/* Room Categories preview (Desktop only — mobile uses quick modal selector) */}
+                      <div className="hidden sm:block mt-3 p-2.5 bg-zinc-50 border border-zinc-200/70 rounded-xl space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                          Contracted Room Categories
                         </span>
                         {(ht.roomCategories && ht.roomCategories.length > 0 ? ht.roomCategories : [
                           { name: 'Standard Room', price: ht.price, pax: 2 }
-                        ]).slice(0, 3).map((room, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-zinc-200/40 last:border-0">
+                        ]).slice(0, 2).map((room, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs py-0.5">
                             <div>
-                              <span className="font-bold text-zinc-800">{room.name}</span>
+                              <span className="font-semibold text-zinc-800">{room.name}</span>
                               <span className="text-[10px] text-zinc-400 ml-2">Max {room.pax || 2} Pax</span>
                             </div>
-                            <span className="font-black text-emerald-700">RM {getB2BRate(room.price)} /night</span>
+                            <span className="font-bold text-emerald-700 tabular-nums">
+                              {formatCatalogPrice(Number(getB2BRate(room.price)) || 0)} /night
+                            </span>
                           </div>
                         ))}
                       </div>
+                    </div>
 
-                      {/* Policies note */}
-                      <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
-                        <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          {ht.termsAndConditions ? 'Free Cancellation up to 48 Hours' : 'Guaranteed Hotel Allocation'}
+                    {/* Mobile Compact Price & Action Row */}
+                    <div className="lg:hidden mt-3 pt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2">
+                      <div className="tabular-nums">
+                        <span className="text-[10px] text-zinc-400 line-through block leading-none">
+                          {formatCatalogPrice(Number(origPrice) || 0)}
                         </span>
-                        <span className="text-zinc-400">
-                          {ht.childPolicy || 'Kids stay free with parents'}
-                        </span>
+                        <div className="text-base font-extrabold text-zinc-950 leading-tight mt-0.5">
+                          {formatCatalogPrice(Number(displayPrice) || 0)}
+                          <span className="text-[10px] font-normal text-zinc-500"> /night</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveHotelModal(ht);
+                            setModalTab('terms');
+                          }}
+                          className="px-2.5 py-2 rounded-xl border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-zinc-700 text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                        >
+                          Policies
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveHotelModal(ht);
+                            setModalTab('options');
+                            setModalSelectedVariantIdx(0);
+                          }}
+                          className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] py-2 px-3 rounded-xl flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                        >
+                          <span>Choose Room</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   </div>
 
-                  {/* Pricing & Booking Column */}
-                  <div className="p-4 sm:p-6 bg-zinc-50 border-t md:border-t-0 md:border-l border-zinc-200/80 w-full md:w-60 shrink-0 flex flex-col justify-between">
-                    <div className="text-left md:text-right">
+                  {/* Desktop Pricing & Booking Column */}
+                  <div className="hidden lg:flex p-6 bg-zinc-50 border-l border-zinc-200/80 w-60 shrink-0 flex-col justify-between">
+                    <div className="text-right tabular-nums">
                       <span className="text-xs text-zinc-400 line-through font-semibold block">
-                        RM {origPrice}
+                        {formatCatalogPrice(Number(origPrice) || 0)}
                       </span>
                       <div className="text-2xl font-black text-zinc-950 leading-none mt-0.5">
-                        RM {displayPrice}
+                        {formatCatalogPrice(Number(displayPrice) || 0)}
                       </div>
-                      <span className="text-[11px] text-zinc-500 font-medium">per room / night</span>
+                      <span className="text-[11px] text-zinc-500 font-medium block">
+                        per room / night
+                      </span>
                     </div>
 
                     <div className="mt-4 space-y-2">
@@ -1418,7 +1793,7 @@ export default function CatalogBrowser({
                           setModalTab('options');
                           setModalSelectedVariantIdx(0);
                         }}
-                        className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs py-2.5 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-1 cursor-pointer"
+                        className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-sm transition-colors flex items-center justify-center gap-1 cursor-pointer"
                       >
                         <span>Choose Room &amp; Book</span>
                         <ArrowRight className="w-3.5 h-3.5" />
@@ -1429,7 +1804,7 @@ export default function CatalogBrowser({
                           setActiveHotelModal(ht);
                           setModalTab('terms');
                         }}
-                        className="w-full bg-white hover:bg-zinc-100 border border-zinc-200 text-zinc-700 font-bold text-xs py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1"
+                        className="w-full bg-white hover:bg-zinc-100 border border-zinc-200 text-zinc-700 font-bold text-xs py-2 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         <span>Stay Policies &amp; T&amp;C</span>
@@ -1447,74 +1822,74 @@ export default function CatalogBrowser({
           6. TRANSPORT FLEET VIEW
       ===================================================================== */}
       {viewType === 'transport' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-zinc-500 uppercase tracking-wider">
-              Showing {filteredTransport.length} Private Transfer Routes &amp; Chauffeur Charters
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-bold text-zinc-600 tabular-nums">
+              {filteredTransport.length} Private Transfers &amp; Chauffeur Routes
             </span>
-            <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full">
-              Flight Tracking Included · Fixed Fares (No Surge)
+            <span className="text-[11px] font-semibold text-blue-700">
+              Fixed Fares · Flight Tracking
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5">
             {filteredTransport.map(tr => {
               const img = resolveImage(tr.image, 'transfer');
               return (
                 <div
                   key={tr.id}
-                  className="bg-white rounded-3xl border border-zinc-200/90 hover:border-blue-500/50 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
+                  className="bg-white rounded-2xl border border-zinc-200 hover:border-blue-500/60 transition-colors overflow-hidden flex flex-col justify-between"
                 >
                   <div>
-                    <div className="relative h-44 bg-zinc-950 overflow-hidden">
+                    <div className="relative h-36 sm:h-44 bg-zinc-950 overflow-hidden">
                       <img
                         src={img}
                         alt={tr.name}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent p-4 flex items-end">
-                        <h3 className="font-black text-white text-sm leading-snug">{tr.name}</h3>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent p-3.5 flex items-end">
+                        {tr.trending && (
+                          <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-[10px] font-extrabold">
+                            <Flame className="w-3 h-3 shrink-0" />
+                            Trending
+                          </span>
+                        )}
+                        <h3 className="font-extrabold text-white text-sm leading-snug">{tr.name}</h3>
                       </div>
                     </div>
 
-                    <div className="p-4">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block mb-2">
-                        Vehicle Tariffs (All Tolls &amp; Fuel Included):
+                    <div className="p-3.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-2">
+                        Vehicle Tariffs (Tolls &amp; Fuel Included)
                       </span>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/60 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 block">Car (1-3 Pax)</span>
-                          <span className="font-black text-zinc-900 mt-0.5 block">RM {getB2BRate(tr.car)}</span>
+                      <div className="grid grid-cols-2 gap-1.5 text-xs tabular-nums">
+                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/70 flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-zinc-500">Car 1-3p</span>
+                          <span className="font-extrabold text-zinc-950">{formatCatalogPrice(getB2BRate(tr.car))}</span>
                         </div>
-                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/60 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 block">MPV (4-5 Pax)</span>
-                          <span className="font-black text-zinc-900 mt-0.5 block">RM {getB2BRate(tr.mpv)}</span>
+                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/70 flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-zinc-500">MPV 4-5p</span>
+                          <span className="font-extrabold text-zinc-950">{formatCatalogPrice(getB2BRate(tr.mpv))}</span>
                         </div>
-                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/60 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 block">Van-7 (6-7 Pax)</span>
-                          <span className="font-black text-zinc-900 mt-0.5 block">RM {getB2BRate(tr.van7)}</span>
+                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/70 flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-zinc-500">Van 7p</span>
+                          <span className="font-extrabold text-zinc-950">{formatCatalogPrice(getB2BRate(tr.van7))}</span>
                         </div>
-                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/60 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 block">Van-13 (8-13 Pax)</span>
-                          <span className="font-black text-zinc-900 mt-0.5 block">RM {getB2BRate(tr.van13)}</span>
+                        <div className="bg-zinc-50 p-2 rounded-xl border border-zinc-200/70 flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-zinc-500">Van 13p</span>
+                          <span className="font-extrabold text-zinc-950">{formatCatalogPrice(getB2BRate(tr.van13))}</span>
                         </div>
                       </div>
-
-                      {tr.instructions && (
-                        <p className="text-[11px] text-zinc-500 font-medium mt-3 line-clamp-2">
-                          {tr.instructions}
-                        </p>
-                      )}
                     </div>
                   </div>
 
-                  <div className="p-4 pt-2 border-t border-zinc-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-700">Door-to-Door</span>
+                  <div className="p-3.5 pt-2.5 border-t border-zinc-100 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-emerald-700">Door-to-Door Pickup</span>
                     <button
                       type="button"
                       onClick={() => onNavigate('/package', { id: tr.id })}
-                      className="bg-blue-600 hover:bg-blue-500 text-white font-black text-xs py-2 px-3.5 rounded-xl shadow-xs cursor-pointer flex items-center gap-1"
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-3.5 rounded-xl cursor-pointer flex items-center gap-1 whitespace-nowrap"
                     >
                       <span>Book Transfer</span>
                       <ArrowRight className="w-3.5 h-3.5" />
@@ -1531,17 +1906,17 @@ export default function CatalogBrowser({
           7. RESTAURANTS & DINING VIEW
       ===================================================================== */}
       {viewType === 'restaurants' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-zinc-500 uppercase tracking-wider">
-              Showing {filteredRestaurants.length} Restaurant Dining &amp; High-Tea Passes
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-bold text-zinc-600 tabular-nums">
+              {filteredRestaurants.length} Dining &amp; High-Tea Passes
             </span>
-            <span className="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-full">
-              Instant Table QR · Michelin Trails &amp; Buffets
+            <span className="text-[11px] font-semibold text-rose-700">
+              Instant Table Voucher
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5">
             {filteredRestaurants.map(tk => {
               const img = resolveImage(tk.image, 'petronas');
               const displayPrice = getB2BRate(tk.price);
@@ -1552,26 +1927,26 @@ export default function CatalogBrowser({
                     setActiveTicketModal(tk);
                     setModalSelectedVariantIdx(0);
                   }}
-                  className="bg-white rounded-3xl border border-zinc-200/90 hover:border-rose-500/50 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between cursor-pointer group"
+                  className="bg-white rounded-2xl border border-zinc-200 hover:border-rose-500/60 transition-colors overflow-hidden flex flex-col justify-between cursor-pointer group"
                 >
                   <div>
-                    <div className="relative h-48 bg-zinc-950 overflow-hidden">
+                    <div className="relative h-36 sm:h-44 bg-zinc-950 overflow-hidden">
                       <img
                         src={img}
                         alt={tk.name}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         referrerPolicy="no-referrer"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent p-4 flex items-end">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent p-3.5 flex items-end">
                         <div>
-                          <span className="bg-rose-500 text-white font-black text-[9px] px-2 py-0.5 rounded uppercase mb-1 inline-block">Dining Pass</span>
-                          <h3 className="font-black text-white text-sm leading-snug">{tk.name}</h3>
+                          <div className="text-[10px] font-bold text-rose-300 mb-0.5">Dining Experience</div>
+                          <h3 className="font-extrabold text-white text-sm leading-snug">{tk.name}</h3>
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-4">
-                      <div className="flex items-center gap-1.5 text-xs text-zinc-500 mb-2">
+                    <div className="p-3.5">
+                      <div className="flex items-center gap-1.5 text-[11px] text-zinc-500 mb-1.5">
                         <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
                         <span className="truncate">{tk.location || 'Kuala Lumpur'}</span>
                       </div>
@@ -1581,12 +1956,14 @@ export default function CatalogBrowser({
                     </div>
                   </div>
 
-                  <div className="p-4 pt-2 border-t border-zinc-100 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-zinc-400 block leading-none">Starting From</span>
-                      <span className="text-base font-extrabold text-zinc-950">RM {(Number(displayPrice) || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">/pax</span></span>
+                  <div className="p-3.5 pt-2.5 border-t border-zinc-100 flex items-center justify-between">
+                    <div className="tabular-nums">
+                      <span className="text-[10px] text-zinc-400 block leading-none">From</span>
+                      <span className="text-base font-extrabold text-zinc-950">
+                        {formatCatalogPrice(Number(displayPrice) || 0)} <span className="text-[11px] font-normal text-zinc-500">/pax</span>
+                      </span>
                     </div>
-                    <span className="bg-rose-600 hover:bg-rose-500 text-white font-black text-xs py-2 px-3.5 rounded-xl shadow-xs inline-flex items-center gap-1">
+                    <span className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs py-2 px-3.5 rounded-xl inline-flex items-center gap-1 whitespace-nowrap">
                       <span>Reserve Table</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </span>
@@ -1602,17 +1979,17 @@ export default function CatalogBrowser({
           8. CRUISES & YACHT CHARTERS VIEW
       ===================================================================== */}
       {viewType === 'cruises' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-extrabold text-zinc-500 uppercase tracking-wider">
-              Showing {filteredCruises.length} Sunset Cruises &amp; Yacht Charters
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-bold text-zinc-600 tabular-nums">
+              {filteredCruises.length} Sunset Cruises &amp; Yacht Charters
             </span>
-            <span className="text-xs font-bold text-cyan-700 bg-cyan-50 px-2.5 py-1 rounded-full">
-              Langkawi Andaman Sea &amp; Marina Charters
+            <span className="text-[11px] font-semibold text-cyan-700">
+              Langkawi &amp; Marina Charters
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5">
             {filteredCruises.map(pkg => {
               const img = resolveImage(pkg.image, 'langkawi');
               const displayPrice = getB2BRate(pkg.base_price);
@@ -1620,26 +1997,26 @@ export default function CatalogBrowser({
                 <div
                   key={pkg.id}
                   onClick={() => onNavigate('/package', { id: pkg.id })}
-                  className="bg-white rounded-3xl border border-zinc-200/90 hover:border-cyan-500/50 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between cursor-pointer group"
+                  className="bg-white rounded-2xl border border-zinc-200 hover:border-cyan-500/60 transition-colors overflow-hidden flex flex-col justify-between cursor-pointer group"
                 >
                   <div>
-                    <div className="relative h-48 bg-zinc-950 overflow-hidden">
+                    <div className="relative h-36 sm:h-44 bg-zinc-950 overflow-hidden">
                       <img
                         src={img}
                         alt={pkg.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         referrerPolicy="no-referrer"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent p-4 flex items-end">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent p-3.5 flex items-end">
                         <div>
-                          <span className="bg-cyan-600 text-white font-black text-[9px] px-2 py-0.5 rounded uppercase mb-1 inline-block">Cruise Experience</span>
-                          <h3 className="font-black text-white text-sm leading-snug">{pkg.title}</h3>
+                          <div className="text-[10px] font-bold text-cyan-300 mb-0.5">Cruise Charter</div>
+                          <h3 className="font-extrabold text-white text-sm leading-snug">{pkg.title}</h3>
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-4">
-                      <div className="flex items-center gap-1.5 text-xs text-zinc-500 mb-2">
+                    <div className="p-3.5">
+                      <div className="flex items-center gap-1.5 text-[11px] text-zinc-500 mb-1.5">
                         <MapPin className="w-3.5 h-3.5 text-cyan-500 shrink-0" />
                         <span className="truncate">{pkg.destination}</span>
                       </div>
@@ -1649,12 +2026,14 @@ export default function CatalogBrowser({
                     </div>
                   </div>
 
-                  <div className="p-4 pt-2 border-t border-zinc-100 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-zinc-400 block leading-none">Starting From</span>
-                      <span className="text-base font-extrabold text-zinc-950">RM {(Number(displayPrice) || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">/pax</span></span>
+                  <div className="p-3.5 pt-2.5 border-t border-zinc-100 flex items-center justify-between">
+                    <div className="tabular-nums">
+                      <span className="text-[10px] text-zinc-400 block leading-none">From</span>
+                      <span className="text-base font-extrabold text-zinc-950">
+                        {formatCatalogPrice(Number(displayPrice) || 0)} <span className="text-[11px] font-normal text-zinc-500">/pax</span>
+                      </span>
                     </div>
-                    <span className="bg-cyan-600 hover:bg-cyan-500 text-white font-black text-xs py-2 px-3.5 rounded-xl shadow-xs inline-flex items-center gap-1">
+                    <span className="bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs py-2 px-3.5 rounded-xl inline-flex items-center gap-1 whitespace-nowrap">
                       <span>Book Cruise</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </span>
@@ -1664,6 +2043,48 @@ export default function CatalogBrowser({
             })}
           </div>
         </div>
+      )}
+
+      {/* =====================================================================
+          9. AVAILABLE FLIGHTS & UPCOMING TRIP FLIGHT SEARCH + QUOTE REQUEST
+      ===================================================================== */}
+      {viewType === 'flights' && (
+        <FlightFinderSection
+          flights={flightsList}
+          variant="full"
+          flightsEmail={globalSettings?.flightsEmail || 'flights@gfkholidays.com'}
+          bookingEmail={globalSettings?.bookingEmail || 'booking@gfkholidays.com'}
+          priceRange={[priceRangeMin, priceRangeMax]}
+          onResetPriceRange={() => {
+            setPriceRangeMin(priceBounds.min);
+            setPriceRangeMax(priceBounds.max);
+          }}
+          getFareRate={(baseFare) => getB2BRate(baseFare)}
+          onReserveFlight={(fl) => {
+            const unitFare = getB2BRate(fl.farePerPax);
+            onNavigate('/checkout', {
+              product: {
+                id: fl.id,
+                title: `${fl.airline} ${fl.flightNumber} (${fl.originCode} → ${fl.destinationCode})`,
+                name: `${fl.airline} ${fl.flightNumber}`,
+                destination: fl.destinationCity,
+                image: 'kl',
+                base_price: unitFare,
+                category: 'Flight',
+                isFlight: true
+              },
+              pax: 1,
+              date: fl.departureDate,
+              timeSlot: `${fl.departureTime} – ${fl.arrivalTime}`,
+              optionName: `${fl.cabinClass || 'Economy'} · ${fl.baggage || '20kg Baggage'}`,
+              displayPrice: unitFare,
+              total: unitFare,
+              commission: 0
+            });
+          }}
+          onNavigate={onNavigate}
+          onSubmitInquiry={onSubmitFlightInquiry}
+        />
       )}
 
       {/* =====================================================================
@@ -1808,6 +2229,36 @@ export default function CatalogBrowser({
                   )}
                 </div>
               )}
+
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-zinc-600">Book via Marketplace:</span>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={
+                      activePackageModal.viatorUrl ||
+                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <span>Viator</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                  <a
+                    href={
+                      activePackageModal.tripadvisorUrl ||
+                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activePackageModal.title} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <span>TripAdvisor</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Sticky Safe-Area Footer (Never Clipped by Bottom Bar) */}
@@ -1815,7 +2266,7 @@ export default function CatalogBrowser({
               <div>
                 <span className="text-[10px] text-zinc-500 block font-semibold">Total Price ({modalPax} Travelers)</span>
                 <span className="text-xl font-black text-zinc-950">
-                  RM {(getB2BRate(activePackageModal.base_price) * modalPax).toLocaleString()}
+                  {formatCatalogPrice(getB2BRate(activePackageModal.base_price) * modalPax)}
                 </span>
               </div>
               <button
@@ -1908,7 +2359,7 @@ export default function CatalogBrowser({
                             )}
                           </div>
                           <div className="text-right shrink-0">
-                            <span className="text-sm font-black text-purple-700">RM {getB2BRate(cat.price)}</span>
+                            <span className="text-sm font-black text-purple-700">{formatCatalogPrice(getB2BRate(cat.price))}</span>
                           </div>
                         </div>
                       ))}
@@ -2001,6 +2452,36 @@ export default function CatalogBrowser({
                   )}
                 </div>
               )}
+
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-zinc-600">Book via Marketplace:</span>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={
+                      activeTicketModal.viatorUrl ||
+                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <span>Viator</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                  <a
+                    href={
+                      activeTicketModal.tripadvisorUrl ||
+                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeTicketModal.name} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <span>TripAdvisor</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Sticky Safe-Area Footer (Never Clipped by Bottom Bar) */}
@@ -2008,13 +2489,12 @@ export default function CatalogBrowser({
               <div>
                 <span className="text-[10px] text-zinc-500 block font-semibold">Total Price ({modalPax} Passes)</span>
                 <span className="text-xl font-black text-zinc-950">
-                  RM{' '}
-                  {(
+                  {formatCatalogPrice(
                     getB2BRate(
                       activeTicketModal.ticketCategories?.[modalSelectedVariantIdx]?.price ||
                         activeTicketModal.price
                     ) * modalPax
-                  ).toLocaleString()}
+                  )}
                 </span>
               </div>
               <button
@@ -2108,7 +2588,7 @@ export default function CatalogBrowser({
                           </div>
                           <div className="text-right shrink-0">
                             <span className="text-sm font-black text-emerald-700">
-                              RM {getB2BRate(room.price)}
+                              {formatCatalogPrice(getB2BRate(room.price))}
                             </span>
                             <span className="text-[9px] text-zinc-400 block">/night</span>
                           </div>
@@ -2184,6 +2664,36 @@ export default function CatalogBrowser({
                   )}
                 </div>
               )}
+
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-zinc-600">Book via Marketplace:</span>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={
+                      activeHotelModal.viatorUrl ||
+                      `https://www.viator.com/searchResults/all?text=${encodeURIComponent(`${activeHotelModal.name} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-950 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <span>Viator</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                  <a
+                    href={
+                      activeHotelModal.tripadvisorUrl ||
+                      `https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${activeHotelModal.name} Malaysia`)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-[#34E0A1] text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <span>TripAdvisor</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Sticky Safe-Area Footer (Never Clipped by Bottom Bar) */}
@@ -2191,13 +2701,12 @@ export default function CatalogBrowser({
               <div>
                 <span className="text-[10px] text-zinc-500 block font-semibold">Total Price ({modalNights} Nights)</span>
                 <span className="text-xl font-black text-zinc-950">
-                  RM{' '}
-                  {(
+                  {formatCatalogPrice(
                     getB2BRate(
                       activeHotelModal.roomCategories?.[modalSelectedVariantIdx]?.price ||
                         activeHotelModal.price
                     ) * modalNights
-                  ).toLocaleString()}
+                  )}
                 </span>
               </div>
               <button
@@ -2343,10 +2852,10 @@ export default function CatalogBrowser({
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: 'none', label: 'Self Arranged', price: 'RM 0', desc: 'No hotel needed' },
-                    { id: '3-Star', label: '3-Star Comfort', price: 'RM 180', desc: 'ibis / Mercure' },
-                    { id: '4-Star', label: '4-Star Premium', price: 'RM 280', desc: 'Hilton / Parkroyal' },
-                    { id: '5-Star', label: '5-Star Luxury', price: 'RM 450', desc: 'Mandarin / Ritz' }
+                    { id: 'none', label: 'Self Arranged', price: 0, desc: 'No hotel needed' },
+                    { id: '3-Star', label: '3-Star Comfort', price: 180, desc: 'ibis / Mercure' },
+                    { id: '4-Star', label: '4-Star Premium', price: 280, desc: 'Hilton / Parkroyal' },
+                    { id: '5-Star', label: '5-Star Luxury', price: 450, desc: 'Mandarin / Ritz' }
                   ].map((tier) => (
                     <button
                       key={tier.id}
@@ -2359,7 +2868,7 @@ export default function CatalogBrowser({
                       }`}
                     >
                       <div className="font-bold text-zinc-900 text-xs">{tier.label}</div>
-                      <div className="text-[10px] text-emerald-700 font-black mt-0.5">{tier.price}/night</div>
+                      <div className="text-[10px] text-emerald-700 font-black mt-0.5">{formatCatalogPrice(tier.price)}/night</div>
                       <div className="text-[9px] text-zinc-400 mt-0.5">{tier.desc}</div>
                     </button>
                   ))}
@@ -2373,10 +2882,10 @@ export default function CatalogBrowser({
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: 'none', label: 'Public Transit', price: 'RM 0', cap: 'No car' },
-                    { id: 'sedan', label: 'Sedan', price: 'RM 180', cap: '1-3 Pax' },
-                    { id: 'mpv', label: 'Toyota MPV', price: 'RM 260', cap: '4-5 Pax' },
-                    { id: 'van', label: 'Hiace Van', price: 'RM 380', cap: '6-10 Pax' }
+                    { id: 'none', label: 'Public Transit', price: 0, cap: 'No car' },
+                    { id: 'sedan', label: 'Sedan', price: 180, cap: '1-3 Pax' },
+                    { id: 'mpv', label: 'Toyota MPV', price: 260, cap: '4-5 Pax' },
+                    { id: 'van', label: 'Hiace Van', price: 380, cap: '6-10 Pax' }
                   ].map((veh) => (
                     <button
                       key={veh.id}
@@ -2389,7 +2898,7 @@ export default function CatalogBrowser({
                       }`}
                     >
                       <div className="font-bold text-zinc-900 text-xs">{veh.label}</div>
-                      <div className="text-[10px] text-blue-700 font-black mt-0.5">{veh.price}</div>
+                      <div className="text-[10px] text-blue-700 font-black mt-0.5">{formatCatalogPrice(veh.price)}</div>
                       <div className="text-[9px] text-zinc-400 mt-0.5">{veh.cap}</div>
                     </button>
                   ))}
@@ -2439,7 +2948,7 @@ export default function CatalogBrowser({
                             <span className="text-[10px] text-purple-700 font-bold ml-2">({att.tag})</span>
                           </div>
                         </div>
-                        <span className="font-black text-xs text-zinc-900">RM {att.price}/pax</span>
+                        <span className="font-black text-xs text-zinc-900">{formatCatalogPrice(att.price)}/pax</span>
                       </div>
                     );
                   })}
@@ -2454,12 +2963,11 @@ export default function CatalogBrowser({
                   Custom Estimate ({customTripDays}D / {Math.max(1, customTripDays - 1)}N)
                 </span>
                 <span className="text-xl font-black text-zinc-950">
-                  RM{' '}
-                  {(
+                  {formatCatalogPrice(
                     (customTripHotelTier === '5-Star' ? 450 : customTripHotelTier === '4-Star' ? 280 : customTripHotelTier === '3-Star' ? 180 : 0) * Math.max(1, customTripDays - 1) +
                     (customTripVehicle === 'van' ? 380 : customTripVehicle === 'mpv' ? 260 : customTripVehicle === 'sedan' ? 180 : 0) +
                     customTripAttractions.length * 75 * (customAdults + customKids)
-                  ).toLocaleString()}
+                  )}
                 </span>
               </div>
 

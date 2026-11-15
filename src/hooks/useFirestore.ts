@@ -14,7 +14,10 @@ import {
 import {
   evictStaleLocalVideoIfMismatch,
   loadVideoBlob,
-  isUniversalHttpVideoUrl
+  isUniversalHttpVideoUrl,
+  getCachedPlayableVideoUrl,
+  cacheHttpVideoInBackground,
+  saveHeroPosterCache
 } from '../lib/videoStorage';
 
 export enum OperationType {
@@ -692,6 +695,10 @@ export function useFirestoreCollection<T extends { id: string }>(
               }
               window.dispatchEvent(new CustomEvent('gfk-logo-updated', { detail: globalItem }));
 
+              if (globalItem.heroFallbackImage) {
+                saveHeroPosterCache(globalItem.heroFallbackImage);
+              }
+
               if (globalItem.heroVideoSource === 'upload') {
                 const cloudFileName = globalItem.heroVideoFileName || '';
                 const cloudUrl = globalItem.heroVideoUrl || '';
@@ -706,17 +713,22 @@ export function useFirestoreCollection<T extends { id: string }>(
                   localStorage.setItem('gfk_featured_video_url', cloudUrl);
                 }
                 if (isUniversalHttpVideoUrl(cloudUrl)) {
-                  window.dispatchEvent(
-                    new CustomEvent('gfk-video-updated', {
-                      detail: {
-                        key: 'hero_background_video',
-                        videoUrl: cloudUrl,
-                        serverUrl: cloudUrl,
-                        sourceMode: 'upload',
-                        fileName: cloudFileName
-                      }
-                    })
-                  );
+                  getCachedPlayableVideoUrl(cloudUrl).then((playable) => {
+                    if (playable === cloudUrl) {
+                      cacheHttpVideoInBackground(cloudUrl).catch(() => {});
+                    }
+                    window.dispatchEvent(
+                      new CustomEvent('gfk-video-updated', {
+                        detail: {
+                          key: 'hero_background_video',
+                          videoUrl: playable,
+                          serverUrl: cloudUrl,
+                          sourceMode: 'upload',
+                          fileName: cloudFileName
+                        }
+                      })
+                    );
+                  });
                 } else {
                   loadVideoBlob('hero_background_video', cloudFileName, cloudUrl).then(
                     (blobOrServerUrl) => {
@@ -739,21 +751,29 @@ export function useFirestoreCollection<T extends { id: string }>(
               } else if (globalItem.heroVideoSource === 'url') {
                 localStorage.setItem('gfk_video_source_mode', 'url');
                 localStorage.removeItem('gfk_uploaded_server_video_url');
-                if (globalItem.heroVideoUrl) {
-                  localStorage.setItem('gfk_hero_video_url', globalItem.heroVideoUrl);
-                  localStorage.setItem('gfk_featured_video_url', globalItem.heroVideoUrl);
+                const cloudUrl = globalItem.heroVideoUrl || '';
+                if (cloudUrl) {
+                  localStorage.setItem('gfk_hero_video_url', cloudUrl);
+                  localStorage.setItem('gfk_featured_video_url', cloudUrl);
                 }
-                window.dispatchEvent(
-                  new CustomEvent('gfk-video-updated', {
-                    detail: {
-                      key: 'hero_background_video',
-                      videoUrl: globalItem.heroVideoUrl,
-                      serverUrl: globalItem.heroVideoUrl,
-                      sourceMode: 'url',
-                      fileName: globalItem.heroVideoFileName || ''
+                if (isUniversalHttpVideoUrl(cloudUrl)) {
+                  getCachedPlayableVideoUrl(cloudUrl).then((playable) => {
+                    if (playable === cloudUrl) {
+                      cacheHttpVideoInBackground(cloudUrl).catch(() => {});
                     }
-                  })
-                );
+                    window.dispatchEvent(
+                      new CustomEvent('gfk-video-updated', {
+                        detail: {
+                          key: 'hero_background_video',
+                          videoUrl: playable,
+                          serverUrl: cloudUrl,
+                          sourceMode: 'url',
+                          fileName: globalItem.heroVideoFileName || ''
+                        }
+                      })
+                    );
+                  });
+                }
               }
             }
           }

@@ -2,6 +2,10 @@ import React, {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { warmBootVideoCache } from './lib/videoStorage';
+
+// Start warming cached hero video immediately before React tree mounts
+warmBootVideoCache();
 
 class ErrorBoundary extends React.Component {
   constructor(props: any) {

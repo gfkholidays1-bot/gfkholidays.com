@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { doc, setDoc } from 'firebase/firestore';
 import { getFirebaseFirestore } from '../lib/firebase';
-import { Package, MapPin, Users, Calendar, Settings, Image as ImageIcon, Plus, Trash2, Shield, Mail, Phone, CreditCard, DollarSign, Clock, CheckCircle, XCircle, Search, Filter, AlertTriangle, FileText, Check, LayoutDashboard, Ticket, Building2, Truck, Box, Package as PackageIcon, Globe, MessageSquare, X, Edit, Crop } from 'lucide-react';
+import { Package, MapPin, Users, Calendar, Settings, Image as ImageIcon, Plus, Trash2, Shield, Mail, Phone, CreditCard, DollarSign, Clock, CheckCircle, XCircle, Search, Filter, AlertTriangle, FileText, Check, LayoutDashboard, Ticket, Building2, Truck, Box, Package as PackageIcon, Globe, MessageSquare, X, Edit, Crop, Plane, RefreshCw, Flame } from 'lucide-react';
+import {
+  useCurrencyRate,
+  syncFxConfig,
+  computeEffectiveRate,
+  computeEffectiveRateFor,
+  formatExactInr,
+  formatCurrencyValue,
+  CURRENCY_ORDER
+} from '../lib/currency';
 import DashboardCharts from './DashboardCharts';
 import HomepageCmsPanel from './HomepageCmsPanel';
 
@@ -52,6 +61,9 @@ export default function AdminPortal({
   reviews,
   onUpdateReviews: onUpdateReviewsProp,
   setReviews,
+  flightInquiries,
+  onUpdateFlightInquiries: onUpdateFlightInquiriesProp,
+  setFlightInquiries,
   getNormalizedItem,
   showToast,
   onNavigate
@@ -66,6 +78,7 @@ export default function AdminPortal({
   const onUpdateBookings = onUpdateBookingsProp || setBookings;
   const onUpdateAllotments = onUpdateAllotmentsProp || setAllotments;
   const onUpdateReviews = onUpdateReviewsProp || setReviews;
+  const onUpdateFlightInquiries = onUpdateFlightInquiriesProp || setFlightInquiries;
   const [activeTab, setActiveTab] = useState('reservations');
   const [resPage, setResPage] = useState(1);
   const [invPage, setInvPage] = useState(1);
@@ -98,6 +111,9 @@ export default function AdminPortal({
   const [htTiming, setHtTiming] = useState('');
   const [htChild, setHtChild] = useState<any>(null);
   const [htRooms, setHtRooms] = useState<any[]>([]);
+  const [htTrending, setHtTrending] = useState(false);
+  const [htViatorUrl, setHtViatorUrl] = useState('');
+  const [htTripadvisorUrl, setHtTripadvisorUrl] = useState('');
 
   const [editingTkIdx, setEditingTkIdx] = useState<number | null>(null);
   const [tkName, setTkName] = useState('');
@@ -111,6 +127,9 @@ export default function AdminPortal({
   const [tkTiming, setTkTiming] = useState('');
   const [tkChild, setTkChild] = useState<any>(null);
   const [tkCats, setTkCats] = useState<any[]>([]);
+  const [tkTrending, setTkTrending] = useState(false);
+  const [tkViatorUrl, setTkViatorUrl] = useState('');
+  const [tkTripadvisorUrl, setTkTripadvisorUrl] = useState('');
 
   const [editingAgIdx, setEditingAgIdx] = useState<number | null>(null);
   const [agComp, setAgComp] = useState('');
@@ -152,6 +171,9 @@ export default function AdminPortal({
   const [pkgTiming, setPkgTiming] = useState('');
   const [pkgChild, setPkgChild] = useState<any>(null);
   const [pkgItinerary, setPkgItinerary] = useState<any[]>([]);
+  const [pkgTrending, setPkgTrending] = useState(false);
+  const [pkgViatorUrl, setPkgViatorUrl] = useState('');
+  const [pkgTripadvisorUrl, setPkgTripadvisorUrl] = useState('');
 
   const [trName, setTrName] = useState('');
   const [trCar, setTrCar] = useState(0);
@@ -163,23 +185,45 @@ export default function AdminPortal({
   const [trImportant, setTrImportant] = useState('');
   const [trTC, setTrTC] = useState('');
   const [trTiming, setTrTiming] = useState('');
+  const [trTrending, setTrTrending] = useState(false);
+  const [trViatorUrl, setTrViatorUrl] = useState('');
+  const [trTripadvisorUrl, setTrTripadvisorUrl] = useState('');
   
   const [smtpHost, setSmtpHost] = useState('');
   const [smtpPort, setSmtpPort] = useState('');
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpPass, setSmtpPass] = useState('');
-  const [accountsEmail, setAccountsEmail] = useState('');
-  const [bookingEmail, setBookingEmail] = useState('');
+  const [accountsEmail, setAccountsEmail] = useState('booking@gfkholidays.com');
+  const [bookingEmail, setBookingEmail] = useState('booking@gfkholidays.com');
+  const [flightsEmail, setFlightsEmail] = useState('flights@gfkholidays.com');
   const [heroVideoUrl, setHeroVideoUrl] = useState('');
   const [heroBgColor, setHeroBgColor] = useState('');
 
+  // Currency & FX Buffer controls (+1 INR default markup, +2% intl markup, 2-min sync)
+  const { baseRate, baseRates, rateInfo, isRefreshing: isRefreshingFx, refreshRate: refreshFxMarketRate } = useCurrencyRate();
+  const [fxMarkupInr, setFxMarkupInr] = useState<number>(1);
+  const [fxMarkupPercent, setFxMarkupPercent] = useState<number>(0);
+  const [fxIntlMarkupPercent, setFxIntlMarkupPercent] = useState<number>(2);
+  const [fxRefreshSeconds, setFxRefreshSeconds] = useState<number>(120);
+  const [fxUseManualRate, setFxUseManualRate] = useState<boolean>(false);
+  const [fxManualRateOverride, setFxManualRateOverride] = useState<number>(20.65);
 
-  
   useEffect(() => {
     const globalSettings = settings?.find((s: any) => s.id === 'global');
     if (globalSettings) {
       setInvoiceTemplate(globalSettings.invoiceTemplate || 'modern');
       setCustomInvoiceHtml(globalSettings.customInvoiceHtml || '');
+      if (globalSettings.bookingEmail) setBookingEmail(globalSettings.bookingEmail);
+      if (globalSettings.accountsEmail) setAccountsEmail(globalSettings.accountsEmail);
+      if (globalSettings.flightsEmail) setFlightsEmail(globalSettings.flightsEmail);
+      if (globalSettings.fxMarkupInr !== undefined) setFxMarkupInr(Number(globalSettings.fxMarkupInr));
+      if (globalSettings.fxMarkupPercent !== undefined) setFxMarkupPercent(Number(globalSettings.fxMarkupPercent));
+      if (globalSettings.fxIntlMarkupPercent !== undefined) setFxIntlMarkupPercent(Number(globalSettings.fxIntlMarkupPercent));
+      if (globalSettings.fxRefreshSeconds !== undefined) setFxRefreshSeconds(Number(globalSettings.fxRefreshSeconds) || 120);
+      if (globalSettings.fxUseManualRate !== undefined) setFxUseManualRate(Boolean(globalSettings.fxUseManualRate));
+      if (globalSettings.fxManualRateOverride !== undefined && Number(globalSettings.fxManualRateOverride) > 5) {
+        setFxManualRateOverride(Number(globalSettings.fxManualRateOverride));
+      }
       if (globalSettings.logoUrl && globalSettings.logoUrl !== 'https://iili.io/ChVw1zF.png') {
         setLogoUrl(globalSettings.logoUrl);
       } else {
@@ -288,7 +332,7 @@ export default function AdminPortal({
                   </div>
                   
                   <p style="font-size: 11px; color: #52525b; margin: 0 0 10px 0; line-height: 1.5;">
-                    After payment, reply directly to this mail or share your transfer slip screenshot with <strong style="color: #3f3f46;">${globalSettings?.accountsEmail || 'accounts@gfkholidays.com'}</strong> mentioning reference <strong style="color: #18181b;">#${booking.id}</strong>.
+                    After payment, reply directly to this mail or share your transfer slip screenshot with <strong style="color: #3f3f46;">${globalSettings?.bookingEmail || 'booking@gfkholidays.com'}</strong> mentioning reference <strong style="color: #18181b;">#${booking.id}</strong>.
                   </p>
                   <p style="font-size: 11px; color: #be123c; background-color: #fff1f2; border: 1px solid #ffe4e6; padding: 10px; border-radius: 6px; font-weight: 700; margin: 0 0 15px 0;">
                     ⚠️ IMPORTANT DEADLINE: ${globalSettings?.invoiceMessage || 'Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
@@ -367,14 +411,20 @@ export default function AdminPortal({
         heroVideoUrl: heroVideoUrl || existing.heroVideoUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4',
         featuredVideoEmbedUrl: existing.featuredVideoEmbedUrl || 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4',
         heroBgColor: heroBgColor || existing.heroBgColor || '#091e1a',
-        invoiceMessage: invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed to accounts@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
+        invoiceMessage: invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed to booking@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
         bankAccountName: bankAccountName || 'GFK HOLIDAYS SDN BHD',
         bankPartner: bankPartner || 'Maybank (Malayan Banking Berhad)',
         bankAccountNumber: bankAccountNumber || '5141 2345 6789',
         invoiceLogoUrl: invoiceLogoUrl || effectiveLogo || '/logo-transparent.svg',
         invoiceTemplate: invoiceTemplate || 'modern',
         customInvoiceHtml: customInvoiceHtml || '',
-        voucherDisplayMode: voucherDisplayMode || 'payment_only'
+        voucherDisplayMode: voucherDisplayMode || 'payment_only',
+        fxMarkupInr: Number.isFinite(Number(fxMarkupInr)) ? Number(fxMarkupInr) : 1,
+        fxMarkupPercent: Number.isFinite(Number(fxMarkupPercent)) ? Math.max(0, Number(fxMarkupPercent)) : 0,
+        fxIntlMarkupPercent: Number.isFinite(Number(fxIntlMarkupPercent)) ? Math.max(0, Number(fxIntlMarkupPercent)) : 2,
+        fxRefreshSeconds: Number(fxRefreshSeconds) >= 30 ? Number(fxRefreshSeconds) : 120,
+        fxUseManualRate: Boolean(fxUseManualRate),
+        fxManualRateOverride: Number(fxManualRateOverride) > 5 ? Number(fxManualRateOverride) : 20.65
       };
       
       if (globalIdx >= 0) newSettings[globalIdx] = updatedGlobal;
@@ -388,6 +438,15 @@ export default function AdminPortal({
         } catch (_e) {}
       }
 
+      syncFxConfig({
+        markupInr: updatedGlobal.fxMarkupInr,
+        markupPercent: updatedGlobal.fxMarkupPercent,
+        intlMarkupPercent: updatedGlobal.fxIntlMarkupPercent,
+        refreshSeconds: updatedGlobal.fxRefreshSeconds,
+        useManualRate: updatedGlobal.fxUseManualRate,
+        manualRateOverride: updatedGlobal.fxManualRateOverride
+      });
+
       if (typeof updateFn === 'function') {
         await updateFn(newSettings);
       } else {
@@ -395,10 +454,10 @@ export default function AdminPortal({
         const cleanData = JSON.parse(JSON.stringify(updatedGlobal));
         await setDoc(doc(db, 'settings', 'global'), cleanData, { merge: true });
       }
-      showToast('Website & Brand Settings Saved to Live Website!');
+      showToast('Website, Currency FX & Brand Settings Saved to Live Website!');
     } catch (err) {
       console.debug('Save website settings warning:', err);
-      showToast('Website & Brand Settings Saved successfully!');
+      showToast('Settings Saved successfully!');
     }
   };
 
@@ -412,15 +471,26 @@ export default function AdminPortal({
         smtpPort: smtpPort || '465',
         smtpUser,
         smtpPass,
-        accountsEmail: accountsEmail || 'accounts@gfkholidays.com',
-        bookingEmail: bookingEmail || 'bookings@gfkholidays.com'
+        accountsEmail: accountsEmail || 'booking@gfkholidays.com',
+        bookingEmail: bookingEmail || 'booking@gfkholidays.com',
+        flightsEmail: flightsEmail || 'flights@gfkholidays.com'
       };
+
+      const globalIdx = newEmailSettings.findIndex((s: any) => s.id === 'global');
+      if (globalIdx >= 0) {
+        newEmailSettings[globalIdx] = {
+          ...newEmailSettings[globalIdx],
+          accountsEmail: accountsEmail || 'booking@gfkholidays.com',
+          bookingEmail: bookingEmail || 'booking@gfkholidays.com',
+          flightsEmail: flightsEmail || 'flights@gfkholidays.com'
+        };
+      }
       
       if (smtpIdx >= 0) newEmailSettings[smtpIdx] = updatedSmtp;
       else newEmailSettings.push(updatedSmtp);
       
       await onUpdateEmailSettings(newEmailSettings);
-      showToast('SMTP Settings Saved Successfully!');
+      showToast('Email Routing & SMTP Settings Saved!');
     }
   };
 
@@ -448,7 +518,10 @@ export default function AdminPortal({
       timings: pkgTiming,
       itinerary: pkgItinerary,
       rating: Number(pkgRating) || 5,
-      reviews: Number(pkgReviews) || 0
+      reviews: Number(pkgReviews) || 0,
+      trending: Boolean(pkgTrending),
+      viatorUrl: pkgViatorUrl.trim(),
+      tripadvisorUrl: pkgTripadvisorUrl.trim()
     };
     if (editingPkgIdx === -1) onUpdatePackages([...packages, pkg]);
     else onUpdatePackages(packages.map((p: any, i: number) => i === editingPkgIdx ? { ...p, ...pkg } : p));
@@ -478,7 +551,10 @@ export default function AdminPortal({
       importantInfo: trImportant,
       termsAndConditions: trTC,
       instructions: trInst,
-      timings: trTiming
+      timings: trTiming,
+      trending: Boolean(trTrending),
+      viatorUrl: trViatorUrl.trim(),
+      tripadvisorUrl: trTripadvisorUrl.trim()
     };
     if (editingTrIdx === -1) onUpdateTransport([...transport, tr]);
     else onUpdateTransport(transport.map((t: any, i: number) => i === editingTrIdx ? { ...t, ...tr } : t));
@@ -507,7 +583,10 @@ export default function AdminPortal({
       importantInfo: htImportant,
       termsAndConditions: htTC,
       instructions: htInst,
-      timings: htTiming
+      timings: htTiming,
+      trending: Boolean(htTrending),
+      viatorUrl: htViatorUrl.trim(),
+      tripadvisorUrl: htTripadvisorUrl.trim()
     };
     if (editingHtIdx === -1) onUpdateHotels([...hotels, ht]);
     else onUpdateHotels(hotels.map((h: any, i: number) => i === editingHtIdx ? { ...h, ...ht } : h));
@@ -537,7 +616,10 @@ export default function AdminPortal({
       importantInfo: tkImportant,
       termsAndConditions: tkTC,
       instructions: tkInst,
-      timings: tkTiming
+      timings: tkTiming,
+      trending: Boolean(tkTrending),
+      viatorUrl: tkViatorUrl.trim(),
+      tripadvisorUrl: tkTripadvisorUrl.trim()
     };
     if (editingTkIdx === -1) onUpdateTickets([...tickets, tk]);
     else onUpdateTickets(tickets.map((t: any, i: number) => i === editingTkIdx ? { ...t, ...tk } : t));
@@ -802,6 +884,7 @@ export default function AdminPortal({
         <div className="flex-1 overflow-y-auto p-4 space-y-1">
           {[
             { id: 'reservations', icon: Calendar, label: 'Reservations' },
+            { id: 'flight_inquiries', icon: Plane, label: `Flight Inquiries (${(flightInquiries || []).filter((i: any) => i.status === 'NEW').length})` },
             { id: 'settings', icon: Crop, label: 'Logo Cropping & Homepage CMS' },
             { id: 'packages', icon: PackageIcon, label: 'Malaysia Packages' },
             { id: 'attractions', icon: FileText, label: 'Attraction Tickets' },
@@ -809,6 +892,7 @@ export default function AdminPortal({
             { id: 'transport', icon: Globe, label: 'Transport Routes' },
             { id: 'allotments', icon: MapPin, label: 'Allotment Slots' },
             { id: 'agents', icon: Users, label: 'B2B Agents' },
+            { id: 'currency_fx', icon: RefreshCw, label: 'Currency & FX Buffer' },
             { id: 'accounts_invoices', icon: DollarSign, label: 'Accounts & Invoices' },
             { id: 'reviews', icon: MessageSquare, label: 'Reviews' },
             { id: 'emails', icon: Mail, label: 'Email Routing' }
@@ -1051,18 +1135,40 @@ export default function AdminPortal({
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
             <div className="space-y-4">
               {packages.map((p: any, i: number) => (
-                <div key={i} className="flex items-center justify-between p-4 border border-zinc-100 rounded-xl">
+                <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
                   <div>
-                    <div className="font-bold text-zinc-900">{p.title}</div>
+                    <div className="font-bold text-zinc-900 flex items-center gap-2">
+                      <span>{p.title}</span>
+                      {p.trending && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-extrabold">
+                          <Flame className="w-3 h-3" /> Trending
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-zinc-500">{p.destination} • {p.duration_days || p.days || 1} Days • RM {p.base_price}</div>
                   </div>
-                  <div className="space-x-2">
-                    <button onClick={() => { setEditingPkgIdx(i); setPkgTitle(p.title); setPkgDesc(p.description); setPkgDest(p.destination); setPkgDays(p.duration_days || p.days || 1); setPkgImg(p.image || p.imageUrl || ''); setPkgVideoUrl(p.videoUrl || ''); setPkgMediaUrls(Array.isArray(p.mediaUrls) ? p.mediaUrls.join(', ') : (p.mediaUrls || '')); setPkgCategory(p.category || 'Packages'); setPkgTags(Array.isArray(p.tags) ? p.tags.join(', ') : (p.tags || '')); setPkgNet(p.net_price || p.pricing?.net || 0); setPkgPub(p.base_price || p.pricing?.published || 0); setPkgChild(p.childPolicy || ''); setPkgImportant(p.importantInfo || p.importantNotes || ''); setPkgTC(p.termsAndConditions || ''); setPkgInst(p.instructions || ''); setPkgTiming(p.timings || p.timing || ''); setPkgItinerary(p.itinerary || []); setPkgRating(p.rating || 5); setPkgReviews(p.reviews || p.reviewsCount || 0); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm">Edit</button> <button onClick={() => handleDeletePackage(i)} className="text-red-500 hover:text-red-700 font-bold text-sm">Delete</button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = packages.map((item: any, idx: number) => idx === i ? { ...item, trending: !item.trending } : item);
+                        onUpdatePackages(updated);
+                        showToast(!p.trending ? 'Marked as Trending Package' : 'Removed from Trending');
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                        p.trending ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-100 text-zinc-600 hover:bg-amber-100'
+                      }`}
+                    >
+                      <Flame className="w-3.5 h-3.5" />
+                      <span>{p.trending ? 'Trending On' : 'Set Trending'}</span>
+                    </button>
+                    <button onClick={() => { setEditingPkgIdx(i); setPkgTitle(p.title); setPkgDesc(p.description); setPkgDest(p.destination); setPkgDays(p.duration_days || p.days || 1); setPkgImg(p.image || p.imageUrl || ''); setPkgVideoUrl(p.videoUrl || ''); setPkgMediaUrls(Array.isArray(p.mediaUrls) ? p.mediaUrls.join(', ') : (p.mediaUrls || '')); setPkgCategory(p.category || 'Packages'); setPkgTags(Array.isArray(p.tags) ? p.tags.join(', ') : (p.tags || '')); setPkgNet(p.net_price || p.pricing?.net || 0); setPkgPub(p.base_price || p.pricing?.published || 0); setPkgChild(p.childPolicy || ''); setPkgImportant(p.importantInfo || p.importantNotes || ''); setPkgTC(p.termsAndConditions || ''); setPkgInst(p.instructions || ''); setPkgTiming(p.timings || p.timing || ''); setPkgItinerary(p.itinerary || []); setPkgRating(p.rating || 5); setPkgReviews(p.reviews || p.reviewsCount || 0); setPkgTrending(Boolean(p.trending)); setPkgViatorUrl(p.viatorUrl || ''); setPkgTripadvisorUrl(p.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => handleDeletePackage(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
               ))}
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingPkgIdx(-1); setPkgTitle(''); setPkgDesc(''); setPkgDest(''); setPkgDays(3); setPkgImg(''); setPkgVideoUrl(''); setPkgMediaUrls(''); setPkgCategory('Packages'); setPkgTags('Luxury, Malaysia'); setPkgNet(0); setPkgPub(0); setPkgChild(''); setPkgImportant(''); setPkgTC(''); setPkgInst(''); setPkgTiming(''); setPkgItinerary([]); setPkgRating(5); setPkgReviews(0); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600">+ Add Malaysia Package</button>
+                <button onClick={() => { setEditingPkgIdx(-1); setPkgTitle(''); setPkgDesc(''); setPkgDest(''); setPkgDays(3); setPkgImg(''); setPkgVideoUrl(''); setPkgMediaUrls(''); setPkgCategory('Packages'); setPkgTags('Luxury, Malaysia'); setPkgNet(0); setPkgPub(0); setPkgChild(''); setPkgImportant(''); setPkgTC(''); setPkgInst(''); setPkgTiming(''); setPkgItinerary([]); setPkgRating(5); setPkgReviews(0); setPkgTrending(false); setPkgViatorUrl(''); setPkgTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Malaysia Package</button>
               </div>
             </div>
           </div>
@@ -1081,16 +1187,38 @@ export default function AdminPortal({
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
              <div className="space-y-4">
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingTrIdx(-1); setTrName(''); setTrCar(0); setTrMpv(0); setTrVan7(0); setTrVan13(0); setTrChild(''); setTrImage(''); setTrImportant(''); setTrTC(''); setTrInst(''); setTrTiming(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600">+ Add Transport Route</button>
+                <button onClick={() => { setEditingTrIdx(-1); setTrName(''); setTrCar(0); setTrMpv(0); setTrVan7(0); setTrVan13(0); setTrChild(''); setTrImage(''); setTrImportant(''); setTrTC(''); setTrInst(''); setTrTiming(''); setTrTrending(false); setTrViatorUrl(''); setTrTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Transport Route</button>
               </div>
               {transport.map((t: any, i: number) => (
-                <div key={i} className="flex items-center justify-between p-4 border border-zinc-100 rounded-xl">
+                <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
                   <div>
-                    <div className="font-bold text-zinc-900">{t.name}</div>
+                    <div className="font-bold text-zinc-900 flex items-center gap-2">
+                      <span>{t.name}</span>
+                      {t.trending && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-extrabold">
+                          <Flame className="w-3 h-3" /> Trending
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-zinc-500">Car: RM {t.car} · MPV: RM {t.mpv} · Van7: RM {t.van7} · Van13: RM {t.van13}</div>
                   </div>
-                  <div>
-                    <button onClick={() => { setEditingTrIdx(i); setTrName(t.name); setTrCar(t.car ?? t.vehicles?.car ?? 0); setTrMpv(t.mpv ?? t.vehicles?.mpv ?? 0); setTrVan7(t.van7 ?? t.vehicles?.van7 ?? 0); setTrVan13(t.van13 ?? t.vehicles?.van13 ?? 0); setTrChild(t.childPolicy || ''); setTrImage(t.image || t.imageUrl || ''); setTrImportant(t.importantInfo || t.importantNotes || ''); setTrTC(t.termsAndConditions || ''); setTrInst(t.instructions || ''); setTrTiming(t.timings || t.timing || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm mr-4">Edit</button> <button onClick={() => handleDeleteTransport(i)} className="text-red-500 hover:text-red-700 font-bold text-sm">Delete</button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = transport.map((item: any, idx: number) => idx === i ? { ...item, trending: !item.trending } : item);
+                        onUpdateTransport(updated);
+                        showToast(!t.trending ? 'Marked as Trending Transfer' : 'Removed from Trending');
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                        t.trending ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-100 text-zinc-600 hover:bg-amber-100'
+                      }`}
+                    >
+                      <Flame className="w-3.5 h-3.5" />
+                      <span>{t.trending ? 'Trending On' : 'Set Trending'}</span>
+                    </button>
+                    <button onClick={() => { setEditingTrIdx(i); setTrName(t.name); setTrCar(t.car ?? t.vehicles?.car ?? 0); setTrMpv(t.mpv ?? t.vehicles?.mpv ?? 0); setTrVan7(t.van7 ?? t.vehicles?.van7 ?? 0); setTrVan13(t.van13 ?? t.vehicles?.van13 ?? 0); setTrChild(t.childPolicy || ''); setTrImage(t.image || t.imageUrl || ''); setTrImportant(t.importantInfo || t.importantNotes || ''); setTrTC(t.termsAndConditions || ''); setTrInst(t.instructions || ''); setTrTiming(t.timings || t.timing || ''); setTrTrending(Boolean(t.trending)); setTrViatorUrl(t.viatorUrl || ''); setTrTripadvisorUrl(t.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => handleDeleteTransport(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
               ))}
@@ -1111,16 +1239,38 @@ export default function AdminPortal({
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
              <div className="space-y-4">
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingHtIdx(-1); setHtName(''); setHtCat('4-Star'); setHtPrice(0); setHtChild(''); setHtRooms([{ name: 'Standard Room', price: 0, pax: 2 }]); setHtImage(''); setHtImportant(''); setHtTC(''); setHtInst(''); setHtTiming(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600">+ Add Contracted Hotel</button>
+                <button onClick={() => { setEditingHtIdx(-1); setHtName(''); setHtCat('4-Star'); setHtPrice(0); setHtChild(''); setHtRooms([{ name: 'Standard Room', price: 0, pax: 2 }]); setHtImage(''); setHtImportant(''); setHtTC(''); setHtInst(''); setHtTiming(''); setHtTrending(false); setHtViatorUrl(''); setHtTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Contracted Hotel</button>
               </div>
               {hotels.map((h: any, i: number) => (
-                <div key={i} className="flex items-center justify-between p-4 border border-zinc-100 rounded-xl">
+                <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
                   <div>
-                    <div className="font-bold text-zinc-900">{h.name}</div>
+                    <div className="font-bold text-zinc-900 flex items-center gap-2">
+                      <span>{h.name}</span>
+                      {h.trending && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-extrabold">
+                          <Flame className="w-3 h-3" /> Trending
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-zinc-500">{h.cat} · RM {h.price} / night</div>
                   </div>
-                  <div>
-                    <button onClick={() => { setEditingHtIdx(i); setHtName(h.name); setHtCat(h.cat || h.category || '4-Star'); setHtPrice(h.price || h.priceOptions?.[0]?.price || 0); setHtChild(h.childPolicy || ''); setHtRooms(Array.isArray(h.roomCategories) ? h.roomCategories : [{ name: 'Standard Room', price: h.price || 0, pax: 2 }]); setHtImage(h.image || h.imageUrl || ''); setHtImportant(h.importantInfo || h.importantNotes || ''); setHtTC(h.termsAndConditions || ''); setHtInst(h.instructions || ''); setHtTiming(h.timings || h.timing || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm mr-4">Edit</button> <button onClick={() => handleDeleteHotel(i)} className="text-red-500 hover:text-red-700 font-bold text-sm">Delete</button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = hotels.map((item: any, idx: number) => idx === i ? { ...item, trending: !item.trending } : item);
+                        onUpdateHotels(updated);
+                        showToast(!h.trending ? 'Marked as Trending Stay' : 'Removed from Trending');
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                        h.trending ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-100 text-zinc-600 hover:bg-amber-100'
+                      }`}
+                    >
+                      <Flame className="w-3.5 h-3.5" />
+                      <span>{h.trending ? 'Trending On' : 'Set Trending'}</span>
+                    </button>
+                    <button onClick={() => { setEditingHtIdx(i); setHtName(h.name); setHtCat(h.cat || h.category || '4-Star'); setHtPrice(h.price || h.priceOptions?.[0]?.price || 0); setHtChild(h.childPolicy || ''); setHtRooms(Array.isArray(h.roomCategories) ? h.roomCategories : [{ name: 'Standard Room', price: h.price || 0, pax: 2 }]); setHtImage(h.image || h.imageUrl || ''); setHtImportant(h.importantInfo || h.importantNotes || ''); setHtTC(h.termsAndConditions || ''); setHtInst(h.instructions || ''); setHtTiming(h.timings || h.timing || ''); setHtTrending(Boolean(h.trending)); setHtViatorUrl(h.viatorUrl || ''); setHtTripadvisorUrl(h.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => handleDeleteHotel(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
               ))}
@@ -1141,16 +1291,38 @@ export default function AdminPortal({
           <div className="bg-white rounded-3xl border border-zinc-250 p-6">
              <div className="space-y-4">
               <div className="p-4 border border-zinc-200 border-dashed rounded-xl text-center bg-zinc-50">
-                <button onClick={() => { setEditingTkIdx(-1); setTkName(''); setTkCats([]); setTkPrice(0); setTkChild(''); setTkInfo(''); setTkAddInfo(''); setTkImage(''); setTkImportant(''); setTkTC(''); setTkInst(''); setTkTiming(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600">+ Add Attraction</button>
+                <button onClick={() => { setEditingTkIdx(-1); setTkName(''); setTkCats([]); setTkPrice(0); setTkChild(''); setTkInfo(''); setTkAddInfo(''); setTkImage(''); setTkImportant(''); setTkTC(''); setTkInst(''); setTkTiming(''); setTkTrending(false); setTkViatorUrl(''); setTkTripadvisorUrl(''); }} className="text-sm font-bold text-zinc-900 hover:text-rose-600 cursor-pointer">+ Add Attraction</button>
               </div>
               {tickets.map((t: any, i: number) => (
-                <div key={i} className="flex items-center justify-between p-4 border border-zinc-100 rounded-xl">
+                <div key={i} className="flex flex-wrap items-center justify-between gap-3 p-4 border border-zinc-100 rounded-xl">
                   <div>
-                    <div className="font-bold text-zinc-900">{t.name}</div>
+                    <div className="font-bold text-zinc-900 flex items-center gap-2">
+                      <span>{t.name}</span>
+                      {t.trending && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-extrabold">
+                          <Flame className="w-3 h-3" /> Trending
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-zinc-500">RM {t.price} · {t.info}</div>
                   </div>
-                  <div>
-                    <button onClick={() => { setEditingTkIdx(i); setTkName(t.name); setTkCats(t.ticketCategories || []); setTkPrice(t.price || t.priceOptions?.[0]?.price || 0); setTkChild(t.childPolicy || ''); setTkInfo(t.info || ''); setTkAddInfo(t.addInfo || t.additionalInfo || ''); setTkImage(t.image || t.imageUrl || ''); setTkImportant(t.importantInfo || t.importantNotes || ''); setTkTC(t.termsAndConditions || ''); setTkInst(t.instructions || ''); setTkTiming(t.timings || t.timing || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm mr-4">Edit</button> <button onClick={() => handleDeleteTicket(i)} className="text-red-500 hover:text-red-700 font-bold text-sm">Delete</button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = tickets.map((item: any, idx: number) => idx === i ? { ...item, trending: !item.trending } : item);
+                        onUpdateTickets(updated);
+                        showToast(!t.trending ? 'Marked as Trending Activity' : 'Removed from Trending');
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                        t.trending ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-100 text-zinc-600 hover:bg-amber-100'
+                      }`}
+                    >
+                      <Flame className="w-3.5 h-3.5" />
+                      <span>{t.trending ? 'Trending On' : 'Set Trending'}</span>
+                    </button>
+                    <button onClick={() => { setEditingTkIdx(i); setTkName(t.name); setTkCats(t.ticketCategories || []); setTkPrice(t.price || t.priceOptions?.[0]?.price || 0); setTkChild(t.childPolicy || ''); setTkInfo(t.info || ''); setTkAddInfo(t.addInfo || t.additionalInfo || ''); setTkImage(t.image || t.imageUrl || ''); setTkImportant(t.importantInfo || t.importantNotes || ''); setTkTC(t.termsAndConditions || ''); setTkInst(t.instructions || ''); setTkTiming(t.timings || t.timing || ''); setTkTrending(Boolean(t.trending)); setTkViatorUrl(t.viatorUrl || ''); setTkTripadvisorUrl(t.tripadvisorUrl || ''); }} className="text-blue-500 hover:text-blue-700 font-bold text-sm cursor-pointer">Edit</button>
+                    <button onClick={() => handleDeleteTicket(i)} className="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer">Delete</button>
                   </div>
                 </div>
               ))}
@@ -1256,23 +1428,32 @@ export default function AdminPortal({
               </div>
 
               <div className="pt-6 mt-6 border-t border-zinc-100">
-                <h3 className="font-bold text-zinc-900 mb-4">Reply-To Addresses</h3>
+                <h3 className="font-bold text-zinc-900 mb-4">Dedicated Email Routing Addresses</h3>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Accounts Email (Invoices)</label>
+                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Payments, Bank Slips &amp; Bookings Email</label>
                     <input 
                       type="email" 
                       className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                      value={accountsEmail || ""} onChange={(e) => setAccountsEmail(e.target.value)}
+                      value={bookingEmail || "booking@gfkholidays.com"} onChange={(e) => setBookingEmail(e.target.value)}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Booking Email (Confirmations)</label>
+                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Flight Fare Quotes &amp; Inquiries Email (Non-Banking)</label>
+                    <input 
+                      type="email" 
+                      className="w-full p-3 bg-sky-50 border border-sky-200 rounded-xl font-bold text-sky-900 outline-none"
+                      value={flightsEmail || "flights@gfkholidays.com"} onChange={(e) => setFlightsEmail(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-zinc-500 mb-1 text-sm font-bold">Accounts / Finance Reply-To Email</label>
                     <input 
                       type="email" 
                       className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none"
-                      value={bookingEmail || ""} onChange={(e) => setBookingEmail(e.target.value)}
+                      value={accountsEmail || "booking@gfkholidays.com"} onChange={(e) => setAccountsEmail(e.target.value)}
                     />
                   </div>
                 </div>
@@ -2013,7 +2194,7 @@ export default function AdminPortal({
 
                 <div className={`text-xs font-medium p-4 border ${invoiceTemplate === 'classic' ? 'bg-white text-zinc-900 border-zinc-200' : 'bg-zinc-50 text-zinc-500 rounded-xl border-zinc-200'}`}>
                   <strong className="text-red-600 block mb-1">Important:</strong>
-                  {viewInvoiceBooking.invoiceMessage || invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed to accounts@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
+                  {viewInvoiceBooking.invoiceMessage || invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed to booking@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
                 </div>
               </>
             )}
@@ -2219,6 +2400,41 @@ export default function AdminPortal({
                 <textarea rows={2} value={pkgChild} onChange={(e) => setPkgChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
               </div>
 
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-3">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={pkgTrending}
+                    onChange={(e) => setPkgTrending(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
+                  />
+                  <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
+                    <Flame className="w-3.5 h-3.5 text-amber-600" />
+                    Mark as Trending Service (Shown in Viator &amp; TripAdvisor Trending Showcase)
+                  </span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] text-zinc-600 mb-1">Viator Direct URL (Optional)</label>
+                    <input
+                      value={pkgViatorUrl}
+                      onChange={(e) => setPkgViatorUrl(e.target.value)}
+                      className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                      placeholder="https://www.viator.com/..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-zinc-600 mb-1">TripAdvisor Direct URL (Optional)</label>
+                    <input
+                      value={pkgTripadvisorUrl}
+                      onChange={(e) => setPkgTripadvisorUrl(e.target.value)}
+                      className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                      placeholder="https://www.tripadvisor.com/..."
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div className="pt-2 border-t border-zinc-100">
                 <div className="flex justify-between items-center mb-2">
                   <label className="block text-zinc-500">Day-by-Day Itinerary</label>
@@ -2275,7 +2491,7 @@ export default function AdminPortal({
       {/* 2. Transport Route Modal */}
       {editingTrIdx !== null && (
         <div className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2rem] p-8 max-w-md w-full shadow-2xl border border-zinc-100">
+          <div className="bg-white rounded-[2rem] p-8 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-zinc-100">
             <h3 className="text-2xl font-black text-zinc-950 mb-6">
               {editingTrIdx === -1 ? 'Add Private Route' : 'Edit Route Rates'}
             </h3>
@@ -2363,6 +2579,33 @@ export default function AdminPortal({
                 <textarea rows={2} value={trChild} onChange={(e) => setTrChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
               </div>
 
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2.5">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={trTrending}
+                    onChange={(e) => setTrTrending(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
+                  />
+                  <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
+                    <Flame className="w-3.5 h-3.5 text-amber-600" />
+                    Mark as Trending Transfer
+                  </span>
+                </label>
+                <input
+                  value={trViatorUrl}
+                  onChange={(e) => setTrViatorUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="Viator URL (Optional)"
+                />
+                <input
+                  value={trTripadvisorUrl}
+                  onChange={(e) => setTrTripadvisorUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="TripAdvisor URL (Optional)"
+                />
+              </div>
+
               <div className="flex gap-3 pt-4">
                 <button
                   type="submit"
@@ -2395,7 +2638,7 @@ export default function AdminPortal({
       {/* 3. Hotel partner Modal */}
       {editingHtIdx !== null && (
         <div className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2rem] p-8 max-w-md w-full shadow-2xl border border-zinc-100">
+          <div className="bg-white rounded-[2rem] p-8 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-zinc-100">
             <h3 className="text-2xl font-black text-zinc-950 mb-6">
               {editingHtIdx === -1 ? 'Add Hotel Partner' : 'Modify Hotel Contract'}
             </h3>
@@ -2473,6 +2716,33 @@ export default function AdminPortal({
                 <textarea rows={2} value={htChild} onChange={(e) => setHtChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
               </div>
 
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2.5">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={htTrending}
+                    onChange={(e) => setHtTrending(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
+                  />
+                  <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
+                    <Flame className="w-3.5 h-3.5 text-amber-600" />
+                    Mark as Trending Stay
+                  </span>
+                </label>
+                <input
+                  value={htViatorUrl}
+                  onChange={(e) => setHtViatorUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="Viator URL (Optional)"
+                />
+                <input
+                  value={htTripadvisorUrl}
+                  onChange={(e) => setHtTripadvisorUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="TripAdvisor URL (Optional)"
+                />
+              </div>
+
               <div className="pt-2 border-t border-zinc-100">
                 <div className="flex justify-between items-center mb-2">
                   <label className="block text-zinc-500">Room Categories</label>
@@ -2535,7 +2805,7 @@ export default function AdminPortal({
       {/* 4. Ticket Pass Modal */}
       {editingTkIdx !== null && (
         <div className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2rem] p-8 max-w-md w-full shadow-2xl border border-zinc-100">
+          <div className="bg-white rounded-[2rem] p-8 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-zinc-100">
             <h3 className="text-2xl font-black text-zinc-950 mb-6">
               {editingTkIdx === -1 ? 'Add Attraction Ticket' : 'Edit Ticket Parameters'}
             </h3>
@@ -2616,6 +2886,33 @@ export default function AdminPortal({
               <div>
                 <label className="block text-zinc-500 mb-1">Child Policy</label>
                 <textarea rows={2} value={tkChild} onChange={(e) => setTkChild(e.target.value)} className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-900 outline-none resize-none" placeholder="Child policy..." />
+              </div>
+
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2.5">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={tkTrending}
+                    onChange={(e) => setTkTrending(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
+                  />
+                  <span className="font-extrabold text-zinc-900 inline-flex items-center gap-1">
+                    <Flame className="w-3.5 h-3.5 text-amber-600" />
+                    Mark as Trending Activity / Pass
+                  </span>
+                </label>
+                <input
+                  value={tkViatorUrl}
+                  onChange={(e) => setTkViatorUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="Viator URL (Optional)"
+                />
+                <input
+                  value={tkTripadvisorUrl}
+                  onChange={(e) => setTkTripadvisorUrl(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl font-semibold text-zinc-900 outline-none"
+                  placeholder="TripAdvisor URL (Optional)"
+                />
               </div>
 
               <div className="pt-2 border-t border-zinc-100">
@@ -2874,6 +3171,432 @@ export default function AdminPortal({
           </div>
         </div>
       )}
+      {/* Flight Inquiries Tab (routed to flights@gfkholidays.com) */}
+      {activeTab === 'flight_inquiries' && (
+        <div className="space-y-6 animate-fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+            <div>
+              <div className="text-xs font-bold text-sky-700 uppercase tracking-wider flex items-center gap-1.5">
+                <Plane className="w-4 h-4" />
+                <span>Routed to {flightsEmail || 'flights@gfkholidays.com'}</span>
+              </div>
+              <h2 className="text-2xl font-black text-zinc-950 tracking-tight mt-1">
+                Website Flight Fare Quotes &amp; Inquiries
+              </h2>
+              <p className="text-xs text-zinc-500 mt-1">
+                All airline fare codes, custom quotes, baggage, and schedule inquiries submitted from the website. (Payments &amp; banking go to {bookingEmail || 'booking@gfkholidays.com'}.)
+              </p>
+            </div>
+            <div className="text-sm font-extrabold text-zinc-700 bg-sky-50 border border-sky-200 px-4 py-2 rounded-xl">
+              {(flightInquiries || []).length} Total Inquiries
+            </div>
+          </div>
+
+          {(!flightInquiries || flightInquiries.length === 0) ? (
+            <div className="bg-white rounded-3xl p-12 border border-zinc-200 text-center">
+              <Plane className="w-10 h-10 text-zinc-300 mx-auto mb-3" />
+              <p className="text-base font-bold text-zinc-900">No flight fare quote inquiries yet</p>
+              <p className="text-xs text-zinc-500 mt-1">
+                When visitors request an airline fare code or flight quote from the website, it is saved here and sent to {flightsEmail || 'flights@gfkholidays.com'}.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {[...flightInquiries].reverse().map((inq: any) => (
+                <div key={inq.id} className="bg-white rounded-2xl border border-zinc-200 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs">
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs font-extrabold text-sky-800 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-md">
+                        {inq.id}
+                      </span>
+                      <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md border ${
+                        inq.status === 'QUOTED'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : inq.status === 'CLOSED'
+                          ? 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}>
+                        {inq.status || 'NEW'}
+                      </span>
+                      <span className="text-xs font-bold text-zinc-500">{inq.createdAt}</span>
+                    </div>
+                    <h3 className="text-base font-extrabold text-zinc-950">
+                      {inq.airline} {inq.flightCode ? `(${inq.flightCode})` : ''} · {inq.origin} → {inq.destination}
+                    </h3>
+                    <p className="text-xs text-zinc-600 font-medium">
+                      Date: <strong>{inq.departureDate}</strong> · Pax: <strong>{inq.pax}</strong> · Type: <strong>{inq.inquiryType}</strong>
+                    </p>
+                    <p className="text-xs text-zinc-700">
+                      Customer: <strong>{inq.customerName}</strong> ({inq.customerEmail} · {inq.customerPhone})
+                    </p>
+                    {inq.notes && (
+                      <p className="text-xs text-zinc-500 bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 mt-1">
+                        {inq.notes}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <select
+                      value={inq.status || 'NEW'}
+                      onChange={async (e) => {
+                        if (!onUpdateFlightInquiries) return;
+                        const updated = flightInquiries.map((item: any) =>
+                          item.id === inq.id ? { ...item, status: e.target.value } : item
+                        );
+                        await onUpdateFlightInquiries(updated);
+                        showToast(`Inquiry ${inq.id} marked ${e.target.value}`);
+                      }}
+                      className="bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-zinc-900"
+                    >
+                      <option value="NEW">NEW</option>
+                      <option value="QUOTED">QUOTED</option>
+                      <option value="CLOSED">CLOSED</option>
+                    </select>
+                    <a
+                      href={`mailto:${inq.customerEmail}?subject=${encodeURIComponent(`Re: [${inq.id}] Flight Fare Quote - ${inq.origin} to ${inq.destination}`)}`}
+                      className="bg-sky-700 hover:bg-sky-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>Reply Customer</span>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!onUpdateFlightInquiries) return;
+                        await onUpdateFlightInquiries(flightInquiries.filter((item: any) => item.id !== inq.id));
+                        showToast('Flight inquiry removed');
+                      }}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer"
+                      title="Delete Inquiry"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- CURRENCY & FX MARGIN CONTROL TAB --- */}
+      {activeTab === 'currency_fx' && (() => {
+        const draftFxConfig = {
+          markupInr: fxMarkupInr,
+          markupPercent: fxMarkupPercent,
+          intlMarkupPercent: fxIntlMarkupPercent,
+          refreshSeconds: fxRefreshSeconds,
+          useManualRate: fxUseManualRate,
+          manualRateOverride: fxManualRateOverride
+        };
+        const previewEffectiveRate = computeEffectiveRate(baseRate, draftFxConfig);
+        const sampleAmounts = [100, 500, 1000, 2500];
+        const geoRegionMeta: Record<string, string> = {
+          INR: 'India (IN)',
+          MYR: 'Malaysia (MY)',
+          USD: 'United States / Global (US)',
+          SGD: 'Singapore (SG)',
+          GBP: 'United Kingdom (GB)',
+          EUR: 'Eurozone (EU)',
+          AED: 'UAE (AE)',
+          AUD: 'Australia (AU)'
+        };
+
+        return (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Treasury FX Buffer &amp; Stripe INR Pricing Control</span>
+                </div>
+                <h2 className="text-2xl font-black text-zinc-950 tracking-tight mt-1">
+                  INR Exchange Buffer &amp; Auto-Sync Settings
+                </h2>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Market FX rates are fetched silently in the background. Customers only see clean final INR (₹) or MYR (RM) prices with your protection buffer already built in.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => refreshFxMarketRate()}
+                  disabled={isRefreshingFx}
+                  className="bg-zinc-100 hover:bg-zinc-200 text-zinc-900 px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingFx ? 'animate-spin text-emerald-700' : ''}`} />
+                  <span>{isRefreshingFx ? 'Syncing...' : 'Refresh Market Rate'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveWebsiteSettings}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-xl font-black shadow-md flex items-center gap-2 text-xs cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Currency &amp; FX Settings</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Live Admin-Only FX Summary Tiles */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white rounded-3xl p-5 border border-zinc-200 shadow-xs">
+                <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                  Live Market Mid-Rate (Silent Feed)
+                </span>
+                <div className="text-2xl font-black text-zinc-950 mt-1 font-mono tabular-nums">
+                  1 MYR = ₹{baseRate.toFixed(4)}
+                </div>
+                <span className="text-[11px] text-zinc-500 font-semibold mt-1 block">
+                  Source: {rateInfo.source}
+                </span>
+              </div>
+
+              <div className="bg-emerald-50 rounded-3xl p-5 border border-emerald-200 shadow-xs">
+                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
+                  Your Protection Buffer (Account Safety)
+                </span>
+                <div className="text-2xl font-black text-emerald-950 mt-1 font-mono tabular-nums">
+                  +₹{Number(fxMarkupInr).toFixed(2)} {fxMarkupPercent > 0 ? `+ ${fxMarkupPercent}%` : ''} / MYR
+                </div>
+                <span className="text-[11px] text-emerald-700 font-semibold mt-1 block">
+                  Auto-sync every {Math.round(fxRefreshSeconds / 60 * 10) / 10} min ({fxRefreshSeconds}s)
+                </span>
+              </div>
+
+              <div className="bg-zinc-950 text-white rounded-3xl p-5 border border-zinc-800 shadow-sm">
+                <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block">
+                  Effective Customer &amp; Stripe Rate
+                </span>
+                <div className="text-2xl font-black text-white mt-1 font-mono tabular-nums">
+                  1 MYR = ₹{previewEffectiveRate.toFixed(4)}
+                </div>
+                <span className="text-[11px] text-zinc-400 font-medium mt-1 block">
+                  {fxUseManualRate ? 'Manual Fixed Lock Active' : 'Live Market + Your Buffer'}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left Controls */}
+              <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm space-y-5">
+                <h3 className="text-lg font-black text-zinc-950">Configure INR Conversion Markup</h3>
+
+                {/* Flat INR Buffer (+1, +2, etc.) */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-extrabold text-zinc-700 uppercase tracking-wider">
+                    Flat INR Buffer Added Per 1 MYR (+₹)
+                  </label>
+                  <p className="text-xs text-zinc-500">
+                    Recommended: Keep at <strong>+₹1.00</strong> or <strong>+₹2.00</strong> above market rate so Stripe card payouts and bank settlement never result in an FX shortfall.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {[0, 0.5, 1, 1.5, 2, 3].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setFxMarkupInr(preset)}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition-colors cursor-pointer ${
+                          Number(fxMarkupInr) === preset
+                            ? 'bg-emerald-700 text-white border-emerald-700'
+                            : 'bg-zinc-50 hover:bg-zinc-100 text-zinc-800 border-zinc-200'
+                        }`}
+                      >
+                        +₹{preset.toFixed(2)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="pt-2">
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0"
+                      max="15"
+                      value={fxMarkupInr}
+                      onChange={(e) => setFxMarkupInr(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full sm:w-56 px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-black text-zinc-950 text-sm outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-zinc-100">
+                  <div>
+                    <label className="block text-xs font-extrabold text-zinc-700 uppercase tracking-wider mb-1.5">
+                      Optional Extra INR % Spread
+                    </label>
+                    <input
+                      type="number"
+                      step="0.25"
+                      min="0"
+                      max="20"
+                      value={fxMarkupPercent}
+                      onChange={(e) => setFxMarkupPercent(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 text-sm outline-none focus:border-emerald-600"
+                      placeholder="0"
+                    />
+                    <span className="text-[11px] text-zinc-400 mt-1 block">
+                      Keep 0% if using only flat +₹1 / +₹2 buffer.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-extrabold text-zinc-700 uppercase tracking-wider mb-1.5">
+                      Intl Currencies % Buffer
+                    </label>
+                    <input
+                      type="number"
+                      step="0.25"
+                      min="0"
+                      max="20"
+                      value={fxIntlMarkupPercent}
+                      onChange={(e) => setFxIntlMarkupPercent(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 text-sm outline-none focus:border-emerald-600"
+                      placeholder="2"
+                    />
+                    <span className="text-[11px] text-zinc-400 mt-1 block">
+                      USD / SGD / GBP / EUR / AED / AUD at Stripe checkout.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-extrabold text-zinc-700 uppercase tracking-wider mb-1.5">
+                      Rate Refresh Interval
+                    </label>
+                    <select
+                      value={fxRefreshSeconds}
+                      onChange={(e) => setFxRefreshSeconds(Number(e.target.value) || 120)}
+                      className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 text-sm outline-none focus:border-emerald-600 cursor-pointer"
+                    >
+                      <option value={60}>Every 1 Minute (60s)</option>
+                      <option value={120}>Every 2 Minutes (Recommended)</option>
+                      <option value={300}>Every 5 Minutes (300s)</option>
+                      <option value={600}>Every 10 Minutes (600s)</option>
+                    </select>
+                    <span className="text-[11px] text-zinc-400 mt-1 block">
+                      2 minutes keeps rates synced immediately if currency rates shift.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Manual Rate Lock Override */}
+                <div className="pt-4 border-t border-zinc-100 space-y-3">
+                  <label className="flex items-center gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={fxUseManualRate}
+                      onChange={(e) => setFxUseManualRate(e.target.checked)}
+                      className="w-4 h-4 accent-emerald-700 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-extrabold text-zinc-900">
+                      Lock Manual Fixed Rate (Optional Override)
+                    </span>
+                  </label>
+
+                  {fxUseManualRate && (
+                    <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 p-3.5 rounded-2xl">
+                      <span className="text-xs font-bold text-amber-900">1 MYR = ₹</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="10"
+                        max="50"
+                        value={fxManualRateOverride}
+                        onChange={(e) => setFxManualRateOverride(Number(e.target.value) || 20.65)}
+                        className="w-32 px-3 py-2 bg-white border border-amber-300 rounded-xl font-black text-zinc-950 text-sm outline-none"
+                      />
+                      <span className="text-[11px] text-amber-800 font-medium">
+                        Bypasses automatic market feed until unchecked.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Geo-Auto Regional Rate Preview Grid */}
+                <div className="pt-4 border-t border-zinc-100 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-zinc-900 uppercase tracking-wider">
+                      Geo-Auto Regional Browsing &amp; Stripe Checkout Preview
+                    </span>
+                    <span className="text-[11px] font-semibold text-zinc-500">
+                      Sample RM 1,000 service
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {CURRENCY_ORDER.map((code) => {
+                      const effRate = computeEffectiveRateFor(code, baseRates, draftFxConfig);
+                      const convertedSample = formatCurrencyValue(1000 * effRate, code, true);
+                      return (
+                        <div key={code} className="p-2.5 rounded-2xl bg-zinc-50 border border-zinc-200">
+                          <span className="text-[10px] font-bold text-zinc-500 block">
+                            {geoRegionMeta[code] || code}
+                          </span>
+                          <span className="text-xs font-black text-zinc-950 block mt-0.5 tabular-nums">
+                            {convertedSample}
+                          </span>
+                          <span className="text-[10px] text-emerald-700 font-semibold font-mono">
+                            1 MYR = {effRate.toFixed(code === 'INR' ? 2 : 3)} {code}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Preview Calculator */}
+              <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm space-y-4">
+                <h3 className="text-lg font-black text-zinc-950">Customer &amp; Stripe Settlement Preview</h3>
+                <p className="text-xs text-zinc-500">
+                  Customers only see the right-hand INR column on the website and Stripe checkout.
+                </p>
+
+                <div className="border border-zinc-200 rounded-2xl overflow-hidden">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-500 font-bold uppercase">
+                      <tr>
+                        <th className="px-4 py-3">Base MYR</th>
+                        <th className="px-4 py-3">Market Cost</th>
+                        <th className="px-4 py-3">Customer / Stripe INR</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 tabular-nums">
+                      {sampleAmounts.map((myr) => {
+                        const rawInr = myr * baseRate;
+                        const finalInr = myr * previewEffectiveRate;
+                        const bufferInr = finalInr - rawInr;
+                        return (
+                          <tr key={myr}>
+                            <td className="px-4 py-3 font-bold text-zinc-900">RM {myr.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-zinc-500">{formatExactInr(rawInr)}</td>
+                            <td className="px-4 py-3">
+                              <span className="font-black text-emerald-700 block">
+                                {formatExactInr(finalInr)}
+                              </span>
+                              <span className="text-[10px] text-zinc-400">
+                                +{formatExactInr(bufferInr)} safety buffer
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveWebsiteSettings}
+                  className="w-full bg-zinc-950 hover:bg-emerald-700 text-white py-3 rounded-xl font-black text-xs transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save &amp; Apply FX Buffer to Live Storefront</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
     </div>
     </div>

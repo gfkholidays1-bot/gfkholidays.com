@@ -7,8 +7,14 @@ import {
   isUploadedVideoUrl,
   isUniversalHttpVideoUrl,
   ensureUploadedVideoSyncedToServer,
+  getWarmMemoryBlobUrl,
+  getWarmHttpBlobUrl,
+  getCachedPlayableVideoUrl,
+  cacheHttpVideoInBackground,
+  getHeroPosterCache,
   DEFAULT_SCENIC_HERO_VIDEO
 } from '../lib/videoStorage';
+import { HOME_SECTIONS, HOME_SECTION_EVENT, scrollToHomeSection } from '../lib/homeSections';
 import {
   Package,
   Ticket,
@@ -18,7 +24,9 @@ import {
   CustomerMediaItem,
   SocialMediaChannel,
   OtaPartner,
-  GlobalSettings
+  AvailableFlight,
+  GlobalSettings,
+  FlightInquiry
 } from '../types';
 import {
   DEFAULT_CUSTOMER_MEDIA,
@@ -26,6 +34,7 @@ import {
   DEFAULT_OTA_PARTNERS,
   DEFAULT_HOTEL_PARTNER_LOGOS,
   DEFAULT_FLIGHT_PARTNER_LOGOS,
+  DEFAULT_AVAILABLE_FLIGHTS,
   DEFAULT_GLOBAL_SETTINGS
 } from '../data';
 import {
@@ -38,8 +47,6 @@ import {
   Ticket as TicketIcon,
   Wrench,
   Play,
-  Volume2,
-  VolumeX,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -52,9 +59,15 @@ import {
   Search,
   Palmtree,
   UtensilsCrossed,
-  Waves
+  Waves,
+  Plane,
+  Flame,
+  Globe
 } from 'lucide-react';
 import MobileB2CHome from './MobileB2CHome';
+import PartnerAllianceSection from './PartnerAllianceSection';
+import FlightFinderSection from './FlightFinderSection';
+import { useCurrencyRate } from '../lib/currency';
 
 interface MalaysiaHomeProps {
   packages: Package[];
@@ -67,6 +80,9 @@ interface MalaysiaHomeProps {
   imageMap: Record<string, string>;
   onNavigate: (path: string, params?: any) => void;
   onRequestLogin?: (role: 'customer' | 'agent') => void;
+  onSubmitFlightInquiry?: (
+    inquiry: Omit<FlightInquiry, 'id' | 'status' | 'createdAt' | 'targetEmail'>
+  ) => Promise<FlightInquiry | null>;
 }
 
 export default function MalaysiaHome({
@@ -79,8 +95,10 @@ export default function MalaysiaHome({
   globalSettings,
   imageMap,
   onNavigate,
-  onRequestLogin
+  onRequestLogin,
+  onSubmitFlightInquiry
 }: MalaysiaHomeProps) {
+  const { formatPrice } = useCurrencyRate();
   const settings: GlobalSettings = {
     ...DEFAULT_GLOBAL_SETTINGS,
     ...globalSettings,
@@ -98,13 +116,16 @@ export default function MalaysiaHome({
       : DEFAULT_HOTEL_PARTNER_LOGOS,
     flightPartnerLogos: Array.isArray(globalSettings?.flightPartnerLogos)
       ? globalSettings.flightPartnerLogos
-      : DEFAULT_FLIGHT_PARTNER_LOGOS
+      : DEFAULT_FLIGHT_PARTNER_LOGOS,
+    availableFlights:
+      Array.isArray(globalSettings?.availableFlights) && globalSettings.availableFlights.length > 0
+        ? globalSettings.availableFlights
+        : DEFAULT_AVAILABLE_FLIGHTS
   };
 
   // Hero state
   const [heroSearch, setHeroSearch] = useState('');
   const [heroCategory, setHeroCategory] = useState<'all' | 'packages' | 'tickets' | 'hotels' | 'transport'>('all');
-  const [heroMuted, setHeroMuted] = useState(true);
   const heroVideoRef = useRef<HTMLVideoElement>(null);
 
   const isExpressHost = (): boolean =>
@@ -120,36 +141,46 @@ export default function MalaysiaHome({
       (!hasExplicitSource && getVideoSourceMode() === 'upload');
 
     if (isUploadMode) {
+      const warmBlob = getWarmMemoryBlobUrl('hero_background_video', settings.heroVideoFileName);
+      if (warmBlob) return warmBlob;
+
       if (isUniversalHttpVideoUrl(settings.heroVideoUrl)) {
-        return settings.heroVideoUrl!;
+        return getWarmHttpBlobUrl(settings.heroVideoUrl) || settings.heroVideoUrl!;
       }
       if (settings.heroVideoUrl && isExpressHost() && settings.heroVideoUrl.startsWith('/api/cms-video/')) {
         return settings.heroVideoUrl;
       }
       const serverUpload = getUploadedServerVideoUrl();
       if (serverUpload && (isUniversalHttpVideoUrl(serverUpload) || (isExpressHost() && serverUpload.startsWith('/api/cms-video/')))) {
-        return serverUpload;
+        return getWarmHttpBlobUrl(serverUpload) || serverUpload;
       }
-      // For firestore-video:// or remote hosts, loadVideoBlob() reconstructs blob: asynchronously; start with scenic default
-      return DEFAULT_SCENIC_HERO_VIDEO;
+      // Do NOT download DEFAULT_SCENIC_HERO_VIDEO while resolving uploaded firestore-video:// blob;
+      // show 0ms poster frame until IndexedDB/chunks finish cleanly!
+      return '';
     }
 
     const rawUrl = settings.heroVideoUrl || settings.featuredVideoEmbedUrl;
     if (rawUrl && !rawUrl.includes('viddler.com') && !rawUrl.startsWith('firestore-video://')) {
-      return rawUrl;
+      return getWarmHttpBlobUrl(rawUrl) || rawUrl;
     }
-    return DEFAULT_SCENIC_HERO_VIDEO;
+    return getWarmHttpBlobUrl(DEFAULT_SCENIC_HERO_VIDEO) || DEFAULT_SCENIC_HERO_VIDEO;
   };
 
   const [activeHeroVideoUrl, setActiveHeroVideoUrl] = useState<string>(resolvePreferredVideoUrl);
+  const [heroVideoReady, setHeroVideoReady] = useState<boolean>(false);
+  const heroPosterUrl = settings.heroFallbackImage || getHeroPosterCache() || imageMap.kl;
+
+  useEffect(() => {
+    setHeroVideoReady(false);
+  }, [activeHeroVideoUrl]);
 
   // Listen for instant local admin video changes
   useEffect(() => {
     const handleVideoUpdated = (event: any) => {
       const { videoUrl, serverUrl, fileName } = event.detail || {};
       const preferredPlayable =
-        (isUniversalHttpVideoUrl(serverUrl) ? serverUrl : null) ||
         (videoUrl && !String(videoUrl).startsWith('firestore-video://') ? videoUrl : null) ||
+        (isUniversalHttpVideoUrl(serverUrl) ? getWarmHttpBlobUrl(serverUrl) || serverUrl : null) ||
         (serverUrl && isExpressHost() && String(serverUrl).startsWith('/api/cms-video/') ? serverUrl : null);
 
       if (preferredPlayable) {
@@ -177,8 +208,9 @@ export default function MalaysiaHome({
   // Keep video playing in continuous loop without stopping on re-renders
   useEffect(() => {
     const el = heroVideoRef.current;
-    if (!el) return;
+    if (!el || !activeHeroVideoUrl) return;
     el.loop = true;
+    el.muted = true;
     const playPromise = el.play();
     if (playPromise !== undefined) {
       playPromise.catch(() => {
@@ -186,7 +218,7 @@ export default function MalaysiaHome({
         el.play().catch(() => {});
       });
     }
-  }, [activeHeroVideoUrl, heroMuted]);
+  }, [activeHeroVideoUrl]);
 
   // Reactively sync when Firestore settings update from any browser, Netlify, or Phone
   useEffect(() => {
@@ -198,9 +230,20 @@ export default function MalaysiaHome({
     if (isUploadMode) {
       ensureUploadedVideoSyncedToServer('hero_background_video', settings.heroVideoFileName);
 
-      // 1. Universal Firebase Storage HTTPS URL -> play directly everywhere
+      // 1. Universal Firebase Storage HTTPS URL -> check local Cache API for <10ms playback, else stream directly
       if (isUniversalHttpVideoUrl(incomingUrl)) {
-        setActiveHeroVideoUrl((prev) => (prev !== incomingUrl! ? incomingUrl! : prev));
+        setActiveHeroVideoUrl((prev) => {
+          if (prev && prev.startsWith('blob:') && getWarmHttpBlobUrl(incomingUrl) === prev) return prev;
+          return prev !== incomingUrl! ? incomingUrl! : prev;
+        });
+        getCachedPlayableVideoUrl(incomingUrl!).then((resolved) => {
+          if (!isMounted) return;
+          if (resolved && resolved.startsWith('blob:')) {
+            setActiveHeroVideoUrl((prev) => (prev !== resolved ? resolved : prev));
+          } else {
+            cacheHttpVideoInBackground(incomingUrl).catch(() => {});
+          }
+        });
         return () => {
           isMounted = false;
         };
@@ -219,11 +262,24 @@ export default function MalaysiaHome({
       };
     }
 
-    if (incomingUrl && !incomingUrl.includes('viddler.com') && !incomingUrl.startsWith('firestore-video://')) {
-      setActiveHeroVideoUrl((prev) => (prev !== incomingUrl ? incomingUrl : prev));
-    } else if (!incomingUrl) {
-      setActiveHeroVideoUrl(DEFAULT_SCENIC_HERO_VIDEO);
-    }
+    const targetUrl =
+      incomingUrl && !incomingUrl.includes('viddler.com') && !incomingUrl.startsWith('firestore-video://')
+        ? incomingUrl
+        : DEFAULT_SCENIC_HERO_VIDEO;
+
+    setActiveHeroVideoUrl((prev) => {
+      const warm = getWarmHttpBlobUrl(targetUrl);
+      const next = warm || targetUrl;
+      return prev !== next ? next : prev;
+    });
+    getCachedPlayableVideoUrl(targetUrl).then((resolved) => {
+      if (!isMounted) return;
+      if (resolved && resolved.startsWith('blob:')) {
+        setActiveHeroVideoUrl((prev) => (prev !== resolved ? resolved : prev));
+      } else {
+        cacheHttpVideoInBackground(targetUrl).catch(() => {});
+      }
+    });
 
     return () => {
       isMounted = false;
@@ -236,9 +292,79 @@ export default function MalaysiaHome({
     (settings as any)._updatedAt
   ]);
 
+  // Responsive viewport lock so only the active Mobile OR Desktop tree is mounted (guarantees unique DOM section IDs)
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-width: 767px)');
+    const updateViewport = () => setIsMobileViewport(mq.matches);
+    updateViewport();
+    mq.addEventListener('change', updateViewport);
+    return () => mq.removeEventListener('change', updateViewport);
+  }, []);
+
   // Priority Malaysia Activities & Packages state
-  const [activeCatalogTab, setActiveCatalogTab] = useState<'all' | 'packages' | 'tickets' | 'transport'>('all');
   const [selectedLocation, setSelectedLocation] = useState<string>('ALL');
+  const [activeDesktopTab, setActiveDesktopTab] = useState<'all' | 'flights' | 'packages' | 'tickets' | 'hotels'>('all');
+
+  const scrollToDesktopSection = (tabId: 'all' | 'flights' | 'packages' | 'tickets' | 'hotels', targetId: string) => {
+    setActiveDesktopTab(tabId);
+    requestAnimationFrame(() => {
+      scrollToHomeSection(targetId, tabId === 'flights');
+    });
+  };
+
+  useEffect(() => {
+    const handleSectionFocus = (e: Event) => {
+      const detail = (e as CustomEvent<{ sectionId?: string }>).detail;
+      const id = detail?.sectionId;
+      if (
+        id === HOME_SECTIONS.flights ||
+        id === HOME_SECTIONS.packages ||
+        id === HOME_SECTIONS.tickets ||
+        id === HOME_SECTIONS.hotels
+      ) {
+        setActiveDesktopTab(id);
+      }
+    };
+    window.addEventListener(HOME_SECTION_EVENT, handleSectionFocus);
+    return () => window.removeEventListener(HOME_SECTION_EVENT, handleSectionFocus);
+  }, []);
+
+  useEffect(() => {
+    if (isMobileViewport || typeof window === 'undefined' || !('IntersectionObserver' in window)) return;
+    const sectionMap: Array<{ id: string; tab: 'flights' | 'packages' | 'tickets' | 'hotels' }> = [
+      { id: HOME_SECTIONS.flights, tab: 'flights' },
+      { id: HOME_SECTIONS.packages, tab: 'packages' },
+      { id: HOME_SECTIONS.tickets, tab: 'tickets' },
+      { id: HOME_SECTIONS.hotels, tab: 'hotels' }
+    ];
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible.length > 0) {
+          const match = sectionMap.find((item) => item.id === visible[0].target.id);
+          if (match) {
+            setActiveDesktopTab(match.tab);
+          }
+        }
+      },
+      { rootMargin: '-25% 0px -55% 0px', threshold: [0.1, 0.3] }
+    );
+
+    sectionMap.forEach(({ id }) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [isMobileViewport]);
 
   // Hotel Contracts filter state
   const [hotelCategoryFilter, setHotelCategoryFilter] = useState<string>('ALL');
@@ -293,7 +419,6 @@ export default function MalaysiaHome({
   const filteredTickets = tickets.filter(
     (t) => matchesLocation(t.location) || matchesLocation(t.name)
   );
-  const filteredTransport = transport.filter((tr) => matchesLocation(tr.name));
 
   // Filtered hotels for Direct Hotel Contracts section
   const filteredHotels = hotels.filter((h) => {
@@ -370,12 +495,9 @@ export default function MalaysiaHome({
     }
   ];
 
-  return (
-    <div className="flex flex-col">
-      {/* =====================================================================
-          MOBILE B2C PHONE INTERFACE (Matching MakeMyTrip, Cleartrip, Trip.com & Akbar Travels)
-      ===================================================================== */}
-      <div className="md:hidden">
+  if (isMobileViewport) {
+    return (
+      <div className="flex flex-col w-full max-w-full overflow-x-clip">
         <MobileB2CHome
           packages={packages}
           tickets={tickets}
@@ -387,26 +509,36 @@ export default function MalaysiaHome({
           imageMap={imageMap}
           onNavigate={onNavigate}
           onRequestLogin={onRequestLogin}
+          onSubmitFlightInquiry={onSubmitFlightInquiry}
         />
       </div>
+    );
+  }
 
+  return (
+    <div className="flex flex-col w-full max-w-full overflow-x-clip">
       {/* =====================================================================
           DESKTOP B2C HOMEPAGE (Tablets & Desktop Viewports)
       ===================================================================== */}
-      <div className="hidden md:flex md:flex-col">
+      <div className="flex flex-col">
         {/* =====================================================================
             1. HERO SECTION WITH MALAYSIA VIDEO BACKGROUND (ADMIN-MANAGED)
         ===================================================================== */}
         <section className="relative mx-4 md:mx-8 mt-4 rounded-3xl overflow-hidden bg-zinc-950 border border-zinc-800/80 shadow-xl">
-        {/* Background Video & Measured Contrast Scrim */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
+        {/* Background Video & 0ms Instant Poster Backdrop */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none select-none bg-zinc-950">
+          {heroPosterUrl && (
+            <img
+              src={heroPosterUrl}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover scale-105 pointer-events-none select-none"
+            />
+          )}
           <div className="absolute inset-0 w-full h-full flex items-center justify-center">
             {(() => {
-              const src =
-                activeHeroVideoUrl ||
-                (settings.heroVideoUrl && !settings.heroVideoUrl.includes('viddler.com')
-                  ? settings.heroVideoUrl
-                  : 'https://cdn.pixabay.com/video/2020/05/11/38891-421731607_large.mp4');
+              const src = activeHeroVideoUrl;
+              if (!src) return null;
               const isDirectVideo = isDirectVideoSource(src);
               if (isDirectVideo) {
                 return (
@@ -414,9 +546,10 @@ export default function MalaysiaHome({
                     ref={heroVideoRef}
                     key={src}
                     src={src}
+                    poster={heroPosterUrl}
                     autoPlay
                     loop
-                    muted={heroMuted}
+                    muted
                     playsInline
                     preload="auto"
                     controls={false}
@@ -426,6 +559,8 @@ export default function MalaysiaHome({
                     aria-hidden="true"
                     onContextMenu={(e) => e.preventDefault()}
                     onKeyDown={(e) => e.preventDefault()}
+                    onLoadedData={() => setHeroVideoReady(true)}
+                    onCanPlay={() => setHeroVideoReady(true)}
                     onEnded={(e) => {
                       const v = e.currentTarget;
                       v.currentTime = 0;
@@ -450,7 +585,9 @@ export default function MalaysiaHome({
                         }
                       });
                     }}
-                    className="w-[200%] h-[200%] min-w-full min-h-full object-cover scale-110 pointer-events-none select-none"
+                    className={`w-full h-full object-cover scale-105 pointer-events-none select-none transition-opacity duration-300 ${
+                      heroVideoReady ? 'opacity-100' : 'opacity-0'
+                    }`}
                     style={{ pointerEvents: 'none', userSelect: 'none' }}
                   />
                 );
@@ -459,7 +596,7 @@ export default function MalaysiaHome({
                 <iframe
                   key={src}
                   src={src}
-                  className="w-[200%] h-[200%] min-w-full min-h-full object-cover scale-110 pointer-events-none border-0"
+                  className="w-full h-full object-cover scale-105 pointer-events-none border-0"
                   style={{ aspectRatio: '16/9' }}
                   allow="autoplay; fullscreen"
                   allowFullScreen
@@ -479,17 +616,6 @@ export default function MalaysiaHome({
           {/* Measured contrast scrim guaranteeing >= 4.5:1 legibility */}
           <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/65 to-zinc-950/35 pointer-events-none" />
         </div>
-
-        {/* Audio Mute/Unmute Toggle for Malaysia Background Video */}
-        <button
-          type="button"
-          onClick={() => setHeroMuted(!heroMuted)}
-          className="absolute top-6 right-6 z-30 bg-zinc-900/80 hover:bg-zinc-900 backdrop-blur-md text-zinc-200 border border-zinc-700/80 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer"
-          title={heroMuted ? 'Unmute Malaysia Video Audio' : 'Mute Video Audio'}
-        >
-          {heroMuted ? <VolumeX className="w-4 h-4 text-amber-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
-          <span className="hidden sm:inline">{heroMuted ? 'Malaysia Aerial Film (Muted)' : 'Sound On'}</span>
-        </button>
 
         {/* Hero Foreground Content */}
         <div className="relative z-20 max-w-7xl mx-auto px-6 sm:px-10 pt-20 pb-16 lg:pt-28 lg:pb-24">
@@ -651,7 +777,7 @@ export default function MalaysiaHome({
                 </h2>
               </div>
               <p className="text-xs sm:text-sm text-zinc-500 font-medium mt-1">
-                Explore Malaysia&apos;s 6 direct local travel services with instant confirmation
+                Explore Malaysia&apos;s direct local travel services &amp; available flight allotments
               </p>
             </div>
             <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-3.5 py-1.5 rounded-full self-start sm:self-auto">
@@ -659,7 +785,7 @@ export default function MalaysiaHome({
             </span>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
             {/* SERVICE 1: Day Out & Packages */}
             <button
               type="button"
@@ -783,7 +909,7 @@ export default function MalaysiaHome({
             {/* SERVICE 6: Cruises */}
             <button
               type="button"
-              onClick={() => onNavigate('/search', { query: 'Cruise' })}
+              onClick={() => onNavigate('/cruises')}
               className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-teal-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
             >
               <div className="flex items-center justify-between w-full">
@@ -791,7 +917,7 @@ export default function MalaysiaHome({
                   <Waves className="w-5 h-5 stroke-[2.2]" />
                 </div>
                 <span className="bg-cyan-100 text-cyan-900 border border-cyan-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
-                  Sunset Catamaran
+                  Catamaran
                 </span>
               </div>
               <div>
@@ -799,7 +925,56 @@ export default function MalaysiaHome({
                   Cruises
                 </h3>
                 <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
-                  Langkawi &amp; Marina Yachts
+                  Langkawi &amp; Yachts
+                </p>
+              </div>
+            </button>
+
+            {/* SERVICE 7: Available Flights */}
+            <button
+              type="button"
+              onClick={() => onNavigate('/flights')}
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-sky-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
+                  <Plane className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <span className="bg-sky-100 text-sky-900 border border-sky-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                  GFK Stock
+                </span>
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-sky-800 transition-colors leading-tight">
+                  Flights
+                </h3>
+                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                  Live Status &amp; Seats
+                </p>
+              </div>
+            </button>
+
+            {/* SERVICE 8: Marketplace Booking (Viator, TripAdvisor, GetYourGuide, Klook + Trending) */}
+            <button
+              type="button"
+              onClick={() => onNavigate('/marketplaces')}
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
+                  <Globe className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <span className="bg-amber-100 text-amber-900 border border-amber-300/80 text-[10px] font-black px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                  <Flame className="w-2.5 h-2.5 shrink-0" />
+                  Trending
+                </span>
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-tight">
+                  Marketplace Booking
+                </h3>
+                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                  Viator, TripAdvisor &amp; GYG
                 </p>
               </div>
             </button>
@@ -808,54 +983,147 @@ export default function MalaysiaHome({
       </section>
 
       {/* =====================================================================
-          2. PRIORITY SECTION: MALAYSIA ACTIVITIES, ATTRACTION PASSES & PACKAGES
+          DESKTOP QUICK CATEGORY JUMP BAR (AUTO-SCROLLS TO SELECTED SECTION)
       ===================================================================== */}
-      <section
-        id="malaysia-priority-catalog"
-        className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-16 w-full"
-      >
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between mb-8 gap-6">
-          <div>
-            <p className="text-xs font-bold text-emerald-700 mb-2">
-              01. Curated Malaysia Experiences &amp; All-Inclusive Packages
-            </p>
-            <h2
-              className="text-2xl sm:text-4xl font-extrabold text-zinc-950 tracking-tight"
-              style={{ textWrap: 'balance' }}
-            >
-              Top-Selling Malaysia Activities &amp; Holiday Packages
-            </h2>
-            <p className="text-zinc-600 text-sm sm:text-base mt-2 max-w-2xl">
-              Book directly with the local Malaysian operator. Transparent retail and B2B rates across Kuala Lumpur, Langkawi, Penang, Sabah, Genting Highlands, and Semporna.
-            </p>
-          </div>
-
-          {/* Interactive Category Segmented Control */}
-          <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-zinc-100 rounded-xl border border-zinc-200/80 self-start">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-2 w-full">
+        <div className="flex flex-wrap items-center justify-between gap-4 bg-white/95 border border-zinc-200/90 rounded-2xl px-3 py-2 shadow-2xs">
+          <div className="inline-flex flex-wrap items-center gap-1.5 bg-zinc-100 p-1 rounded-xl border border-zinc-200/80">
             {[
-              { id: 'all', label: 'All Highlights' },
-              { id: 'packages', label: `Tour Packages (${packages.length})` },
-              { id: 'tickets', label: `Attraction Tickets (${tickets.length})` },
-              { id: 'transport', label: `Private Chauffeur (${transport.length})` }
+              { id: 'all', label: 'All Services', targetId: HOME_SECTIONS.flights },
+              { id: 'flights', label: 'Flights', targetId: HOME_SECTIONS.flights },
+              { id: 'packages', label: 'Packages', targetId: HOME_SECTIONS.packages },
+              { id: 'tickets', label: 'Tickets', targetId: HOME_SECTIONS.tickets },
+              { id: 'hotels', label: 'Hotels', targetId: HOME_SECTIONS.hotels }
             ].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveCatalogTab(tab.id as any)}
-                className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeCatalogTab === tab.id
-                    ? 'bg-white text-zinc-950 shadow-sm'
-                    : 'text-zinc-600 hover:text-zinc-950'
+                onClick={() => scrollToDesktopSection(tab.id as any, tab.targetId)}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  activeDesktopTab === tab.id
+                    ? 'bg-zinc-950 text-white shadow-xs'
+                    : 'text-zinc-600 hover:text-zinc-950 hover:bg-white/70'
                 }`}
               >
                 {tab.label}
               </button>
             ))}
           </div>
+          <span className="hidden md:inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-500 pr-2">
+            <Compass className="w-3.5 h-3.5 text-emerald-700" />
+            Select a category to jump smoothly to its section
+          </span>
+        </div>
+      </div>
+
+      {/* =====================================================================
+          UPPER VIEW FLIGHTS: UPCOMING FLIGHTS FIRST + SEARCH + FARE QUOTES
+      ===================================================================== */}
+      <FlightFinderSection
+        sectionId={HOME_SECTIONS.flights}
+        flights={settings.availableFlights || DEFAULT_AVAILABLE_FLIGHTS}
+        variant="desktop-upper"
+        flightsEmail={settings.flightsEmail || 'flights@gfkholidays.com'}
+        bookingEmail={settings.bookingEmail || 'booking@gfkholidays.com'}
+        onReserveFlight={(fl: AvailableFlight) =>
+          onNavigate('/checkout', {
+            product: {
+              id: fl.id,
+              title: `${fl.airline} ${fl.flightNumber} (${fl.originCode} → ${fl.destinationCode})`,
+              name: `${fl.airline} ${fl.flightNumber}`,
+              destination: fl.destinationCity,
+              image: 'kl',
+              base_price: fl.farePerPax,
+              category: 'Flight',
+              isFlight: true
+            },
+            pax: 1,
+            date: fl.departureDate,
+            timeSlot: `${fl.departureTime} – ${fl.arrivalTime}`,
+            optionName: `${fl.cabinClass || 'Economy'} · ${fl.baggage || '20kg Baggage'}`,
+            displayPrice: fl.farePerPax,
+            total: fl.farePerPax,
+            commission: 0
+          })
+        }
+        onNavigate={onNavigate}
+        onSubmitInquiry={onSubmitFlightInquiry}
+      />
+
+      {/* =====================================================================
+          SYSTEMATIC TRANSITION BAND BETWEEN FLIGHT SEARCH & TRAVEL SERVICES
+      ===================================================================== */}
+      <div className="w-full bg-zinc-100 border-y border-zinc-200 my-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-mono font-bold uppercase tracking-widest text-emerald-700">
+              Malaysia Direct Operator Catalog
+            </p>
+            <p className="text-sm sm:text-base font-bold text-zinc-900 mt-1">
+              Explore curated Holiday Packages, Instant Attraction E-Tickets &amp; Contracted Hotels below.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => scrollToDesktopSection('packages', HOME_SECTIONS.packages)}
+              className="px-3.5 py-2 rounded-xl bg-white hover:bg-amber-50 border border-zinc-200 hover:border-amber-300 text-xs font-bold text-zinc-800 transition-colors cursor-pointer"
+            >
+              Tour Packages
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToDesktopSection('tickets', HOME_SECTIONS.tickets)}
+              className="px-3.5 py-2 rounded-xl bg-white hover:bg-purple-50 border border-zinc-200 hover:border-purple-300 text-xs font-bold text-zinc-800 transition-colors cursor-pointer"
+            >
+              Attraction E-Tickets
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToDesktopSection('hotels', HOME_SECTIONS.hotels)}
+              className="px-3.5 py-2 rounded-xl bg-white hover:bg-emerald-50 border border-zinc-200 hover:border-emerald-300 text-xs font-bold text-zinc-800 transition-colors cursor-pointer"
+            >
+              Contracted Hotels
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* =====================================================================
+          HOLIDAY TOUR PACKAGES SECTION
+      ===================================================================== */}
+      <section
+        id={HOME_SECTIONS.packages}
+        className="scroll-mt-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 w-full"
+      >
+        {/* Differentiated Bold Landmark Heading */}
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between mb-6 pb-4 border-b border-zinc-200 gap-6">
+          <div className="border-l-4 border-amber-500 pl-4">
+            <p className="text-xs font-mono font-bold uppercase tracking-widest text-amber-700 mb-1">
+              Holiday Tour Packages
+            </p>
+            <h2
+              className="text-2xl sm:text-4xl font-black text-zinc-950 tracking-tight leading-tight"
+              style={{ textWrap: 'balance' }}
+            >
+              Curated Malaysia Holiday Packages
+            </h2>
+            <p className="text-zinc-600 text-sm mt-1.5 max-w-2xl">
+              Book multi-day tours, hotel stays, and private airport transfers directly with our Malaysian ground desk.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('/search', { category: 'Packages' })}
+            className="text-xs font-bold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer self-start lg:self-auto shrink-0"
+          >
+            View All {packages.length} Packages <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Interactive Location Filter Bar */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-4 mb-8 border-b border-zinc-200">
+        <div className="flex items-center gap-2 overflow-x-auto pb-4 mb-8">
           {malaysiaLocations.map((loc) => (
             <button
               key={loc.id}
@@ -872,13 +1140,9 @@ export default function MalaysiaHome({
           ))}
         </div>
 
-        {/* Priority Grid of Malaysia Packages, Attraction Tickets & Transfers */}
+        {/* Packages Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* Render Packages */}
-          {(activeCatalogTab === 'all' || activeCatalogTab === 'packages') &&
-            filteredPackages
-              .slice(0, activeCatalogTab === 'packages' ? 8 : 4)
-              .map((pkg) => {
+          {filteredPackages.slice(0, 4).map((pkg) => {
                 const img = resolveImage(pkg.image, 'langkawi');
                 const safeBase = Number(pkg.base_price) || 0;
                 const commPct = Number(currentAgent?.commission) || 0;
@@ -910,6 +1174,12 @@ export default function MalaysiaHome({
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
+                        {pkg.trending && (
+                          <span className="absolute top-3 left-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-400 text-zinc-950 text-[11px] font-extrabold">
+                            <Flame className="w-3 h-3 shrink-0" />
+                            Trending
+                          </span>
+                        )}
                         <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-xs text-white font-semibold">
                           <span className="flex items-center truncate">
                             <MapPin className="w-3.5 h-3.5 mr-1 text-emerald-400 shrink-0" />
@@ -923,15 +1193,15 @@ export default function MalaysiaHome({
 
                       <div className="p-5">
                         {/* Unboxed clean metadata */}
-                        <div className="flex items-center gap-1.5 text-xs text-zinc-500 mb-2 tabular-nums">
-                          <span className="font-semibold text-emerald-700">Malaysia Package</span>
+                        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 tabular-nums">
+                          <span className="font-bold text-amber-700">Tour Package</span>
                           <span aria-hidden="true">·</span>
                           <span>★ {pkg.rating || 4.9} ({pkg.reviews || 210})</span>
                           <span aria-hidden="true">·</span>
-                          <span className="text-amber-700 font-semibold">Save {savingsPct}%</span>
+                          <span className="text-emerald-700 font-bold">Save {savingsPct}%</span>
                         </div>
 
-                        <h3 className="text-base font-bold text-zinc-950 group-hover:text-emerald-700 transition-colors line-clamp-2 leading-snug">
+                        <h3 className="text-[15px] font-bold text-zinc-900 group-hover:text-emerald-700 transition-colors line-clamp-2 leading-snug">
                           {pkg.title}
                         </h3>
 
@@ -944,10 +1214,10 @@ export default function MalaysiaHome({
                     <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
                       <div>
                         <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                          RM {(origPrice || 0).toLocaleString()}
+                          {formatPrice(origPrice || 0)}
                         </span>
                         <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                          RM {(displayPrice || 0).toLocaleString()}
+                          {formatPrice(displayPrice || 0)}
                           <span className="text-xs font-normal text-zinc-500"> / pax</span>
                         </div>
                       </div>
@@ -957,156 +1227,239 @@ export default function MalaysiaHome({
                     </div>
                   </div>
                 );
-              })}
+          })}
+          </div>
+      </section>
 
-          {/* Render Attraction Tickets */}
-          {(activeCatalogTab === 'all' || activeCatalogTab === 'tickets') &&
-            filteredTickets
-              .slice(0, activeCatalogTab === 'tickets' ? 8 : 4)
-              .map((tk) => {
-                const img = resolveImage(tk.image, 'petronas');
-                const safePrice = Number(tk.price) || 0;
-                const commPct = Number(currentAgent?.commission) || 0;
-                const displayPrice = currentAgent
-                  ? Math.round(safePrice * (1 - commPct / 100))
-                  : safePrice;
-                const origPrice = Number(tk.originalPrice) || Math.round(safePrice * 1.25);
+      {/* =====================================================================
+          ATTRACTION E-TICKETS & PASSES SECTION
+      ===================================================================== */}
+      <section id={HOME_SECTIONS.tickets} className="scroll-mt-24 w-full bg-white border-y border-zinc-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-8 pb-4 border-b border-zinc-200 gap-4">
+            <div className="border-l-4 border-purple-600 pl-4">
+              <p className="text-xs font-mono font-bold uppercase tracking-widest text-purple-700 mb-1">
+                Attraction Passes &amp; Gate E-Tickets
+              </p>
+              <h2 className="text-2xl sm:text-4xl font-black text-zinc-950 tracking-tight leading-tight">
+                Instant Attraction E-Tickets
+              </h2>
+              <p className="text-zinc-600 text-sm mt-1.5">
+                Direct turnstile barcode admission for Petronas Twin Towers, Genting SkyWorlds, Sunway Lagoon &amp; Langkawi SkyCab.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/tickets')}
+              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer self-start sm:self-auto shrink-0"
+            >
+              View All {tickets.length} Passes <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
 
-                return (
-                  <div
-                    key={tk.id}
-                    onClick={() => onNavigate('/package', { id: tk.id })}
-                    className="bg-white rounded-2xl border border-zinc-200/90 overflow-hidden hover:border-emerald-600/60 transition-all cursor-pointer group flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="relative h-52 overflow-hidden bg-zinc-900">
-                        <img
-                          src={img}
-                          alt={tk.name}
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.src = imageMap.petronas;
-                          }}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
-                        <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-xs text-white font-semibold">
-                          <span className="flex items-center truncate">
-                            <MapPin className="w-3.5 h-3.5 mr-1 text-amber-400 shrink-0" />
-                            <span className="truncate">{tk.location || 'Kuala Lumpur, Malaysia'}</span>
-                          </span>
-                          <span className="shrink-0 ml-2 text-emerald-300">Instant E-Ticket</span>
-                        </div>
-                      </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {filteredTickets.slice(0, 4).map((tk) => {
+              const img = resolveImage(tk.image, 'petronas');
+              const safePrice = Number(tk.price) || 0;
+              const commPct = Number(currentAgent?.commission) || 0;
+              const displayPrice = currentAgent
+                ? Math.round(safePrice * (1 - commPct / 100))
+                : safePrice;
+              const origPrice = Number(tk.originalPrice) || Math.round(safePrice * 1.25);
 
-                      <div className="p-5">
-                        <div className="flex items-center gap-1.5 text-xs text-zinc-500 mb-2 tabular-nums">
-                          <span className="font-semibold text-rose-700">Attraction Pass</span>
-                          <span aria-hidden="true">·</span>
-                          <span>★ {tk.rating || 4.8} ({tk.reviews || 340})</span>
-                        </div>
-
-                        <h3 className="text-base font-bold text-zinc-950 group-hover:text-emerald-700 transition-colors line-clamp-2 leading-snug">
-                          {tk.name}
-                        </h3>
-
-                        <p className="text-xs text-zinc-500 mt-2 line-clamp-2 leading-relaxed">
-                          {tk.instructions || tk.info}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
-                      <div>
-                        <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                          RM {(origPrice || 0).toLocaleString()}
-                        </span>
-                        <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                          RM {(displayPrice || 0).toLocaleString()}
-                          <span className="text-xs font-normal text-zinc-500"> / ticket</span>
-                        </div>
-                      </div>
-                      <span className="text-xs font-bold text-emerald-700 group-hover:translate-x-0.5 transition-transform inline-flex items-center whitespace-nowrap">
-                        Get Pass <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-
-          {/* Render Transport Routes when selected */}
-          {activeCatalogTab === 'transport' &&
-            filteredTransport.slice(0, 8).map((tr) => {
-              const img = resolveImage(tr.image, 'transfer');
               return (
                 <div
-                  key={tr.id}
-                  onClick={() => onNavigate('/package', { id: tr.id })}
-                  className="bg-white rounded-2xl border border-zinc-200/90 overflow-hidden hover:border-emerald-600/60 transition-all cursor-pointer group flex flex-col justify-between"
+                  key={tk.id}
+                  onClick={() => onNavigate('/package', { id: tk.id })}
+                  className="bg-zinc-50/70 hover:bg-white rounded-2xl border border-zinc-200/90 overflow-hidden hover:border-purple-600/60 transition-all cursor-pointer group flex flex-col justify-between"
                 >
                   <div>
-                    <div className="relative h-48 overflow-hidden bg-zinc-900">
+                    <div className="relative h-52 overflow-hidden bg-zinc-900">
                       <img
                         src={img}
-                        alt={tr.name}
+                        alt={tk.name}
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
-                          target.src = imageMap.transfer;
+                          target.src = imageMap.petronas;
                         }}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
-                      <div className="absolute bottom-3 left-4 text-xs text-white font-semibold">
-                        Private Chauffeur · Sedan / MPV / Van
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
+                      {tk.trending && (
+                        <span className="absolute top-3 left-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-400 text-zinc-950 text-[11px] font-extrabold">
+                          <Flame className="w-3 h-3 shrink-0" />
+                          Trending
+                        </span>
+                      )}
+                      <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-xs text-white font-semibold">
+                        <span className="flex items-center truncate">
+                          <MapPin className="w-3.5 h-3.5 mr-1 text-amber-400 shrink-0" />
+                          <span className="truncate">{tk.location || 'Kuala Lumpur, Malaysia'}</span>
+                        </span>
+                        <span className="shrink-0 ml-2 text-emerald-300">Instant E-Ticket</span>
                       </div>
                     </div>
-                    <div className="p-5">
-                      <div className="flex items-center gap-1.5 text-xs text-zinc-500 mb-2 tabular-nums">
-                        <span className="font-semibold text-indigo-700">Malaysia Transfer</span>
+
+                    <div className="p-5 bg-white">
+                      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 tabular-nums">
+                        <span className="font-bold text-purple-700">Attraction Pass</span>
                         <span aria-hidden="true">·</span>
-                        <span>★ {tr.rating || 4.9}</span>
+                        <span>★ {tk.rating || 4.8} ({tk.reviews || 340})</span>
                       </div>
-                      <h3 className="text-base font-bold text-zinc-950 group-hover:text-emerald-700 transition-colors line-clamp-2">
-                        {tr.name}
+
+                      <h3 className="text-[15px] font-bold text-zinc-900 group-hover:text-emerald-700 transition-colors line-clamp-2 leading-snug">
+                        {tk.name}
                       </h3>
-                      <p className="text-xs text-zinc-500 mt-2 line-clamp-2">
-                        {tr.instructions || 'Door-to-door private transfer inclusive of fuel & highway tolls.'}
+
+                      <p className="text-xs text-zinc-500 mt-2 line-clamp-2 leading-relaxed">
+                        {tk.instructions || tk.info}
                       </p>
                     </div>
                   </div>
-                  <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
+
+                  <div className="px-5 pb-5 pt-3 bg-white border-t border-zinc-100 flex items-end justify-between">
                     <div>
-                      <span className="text-[11px] text-zinc-400 block">Private Vehicle From</span>
+                      <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
+                        {formatPrice(origPrice || 0)}
+                      </span>
                       <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                        RM {(Number(tr.car) || 0).toLocaleString()}
+                        {formatPrice(displayPrice || 0)}
+                        <span className="text-xs font-normal text-zinc-500"> / ticket</span>
                       </div>
                     </div>
-                    <span className="text-xs font-bold text-emerald-700 inline-flex items-center">
-                      Book Fleet <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                    <span className="text-xs font-bold text-emerald-700 group-hover:translate-x-0.5 transition-transform inline-flex items-center whitespace-nowrap">
+                      Get Pass <ArrowRight className="w-3.5 h-3.5 ml-1" />
                     </span>
                   </div>
                 </div>
               );
             })}
+          </div>
+        </div>
+      </section>
+
+      {/* =====================================================================
+          DIRECT CONTRACTED HOTELS & RESORTS SECTION
+      ===================================================================== */}
+      <section id={HOME_SECTIONS.hotels} className="scroll-mt-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 w-full">
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between mb-8 pb-4 border-b border-zinc-200 gap-6">
+          <div className="border-l-4 border-emerald-600 pl-4">
+            <p className="text-xs font-mono font-bold uppercase tracking-widest text-emerald-700 mb-1">
+              Contracted Hotels &amp; Stays
+            </p>
+            <h2 className="text-2xl sm:text-4xl font-black text-zinc-950 tracking-tight leading-tight">
+              {settings.hotelContractsTitle ||
+                'Direct Malaysia Hotel Contracts & Resorts'}
+            </h2>
+            <p className="text-zinc-600 text-sm mt-1.5 max-w-2xl">
+              {settings.hotelContractsSubtitle ||
+                'Pre-negotiated hotel allotments across Kuala Lumpur, Langkawi, Genting Highlands & Penang without intermediary markups.'}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-zinc-100 rounded-xl border border-zinc-200/80 self-start">
+            {['ALL', '5-Star', '4-Star', 'Resort', '3-Star'].map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setHotelCategoryFilter(cat)}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  hotelCategoryFilter === cat
+                    ? 'bg-white text-zinc-950 shadow-sm'
+                    : 'text-zinc-600 hover:text-zinc-950'
+                }`}
+              >
+                {cat === 'ALL' ? 'All Contracted Hotels' : cat}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Quick Catalog Directory Actions */}
-        <div className="mt-10 pt-8 border-t border-zinc-200 flex flex-wrap items-center justify-between gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {filteredHotels.slice(0, 8).map((ht) => {
+            const img = resolveImage(ht.image, 'hotel');
+            const safePrice = Number(ht.price) || 0;
+            const commPct = Number(currentAgent?.commission) || 0;
+            const displayPrice = currentAgent
+              ? Math.round(safePrice * (1 - commPct / 100))
+              : safePrice;
+            const origPrice = Number(ht.originalPrice) || Math.round(safePrice * 1.28);
+
+            return (
+              <div
+                key={ht.id}
+                onClick={() => onNavigate('/package', { id: ht.id })}
+                className="bg-white rounded-2xl border border-zinc-200/90 overflow-hidden hover:border-emerald-600/60 transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="relative h-44 bg-zinc-900 overflow-hidden">
+                    <img
+                      src={img}
+                      alt={ht.name}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = imageMap.hotel;
+                      }}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
+                    {ht.trending && (
+                      <span className="absolute top-3 left-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-400 text-zinc-950 text-[11px] font-extrabold">
+                        <Flame className="w-3 h-3 shrink-0" />
+                        Trending
+                      </span>
+                    )}
+                    <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-xs text-white font-semibold">
+                      <span className="flex items-center truncate">
+                        <Building className="w-3.5 h-3.5 mr-1 text-amber-400 shrink-0" />
+                        <span className="truncate">{ht.location || 'Kuala Lumpur'}</span>
+                      </span>
+                      <span className="text-amber-300 shrink-0 ml-2">{ht.cat}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-5">
+                    <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 tabular-nums">
+                      <span className="font-bold text-emerald-700">
+                        {ht.contractBadge || 'Contract Hotel'}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>★ {ht.rating || 4.7}</span>
+                    </div>
+
+                    <h3 className="text-[15px] font-bold text-zinc-900 group-hover:text-emerald-700 transition-colors line-clamp-1">
+                      {ht.name}
+                    </h3>
+
+                    <p className="text-xs text-zinc-500 mt-1.5 line-clamp-2">
+                      {ht.instructions}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
+                  <div>
+                    <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
+                      {formatPrice(origPrice)}
+                    </span>
+                    <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
+                      {formatPrice(displayPrice)}
+                      <span className="text-xs font-normal text-zinc-500"> / night</span>
+                    </div>
+                  </div>
+                  <span className="text-xs font-bold text-emerald-700 inline-flex items-center whitespace-nowrap">
+                    Book Stay <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-8 pt-6 border-t border-zinc-200 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-6 text-xs text-zinc-600 font-semibold">
-            <button
-              onClick={() => onNavigate('/search')}
-              className="hover:text-emerald-700 flex items-center gap-1.5 cursor-pointer"
-            >
-              <Compass className="w-4 h-4 text-emerald-700" /> View All {packages.length} Malaysia Tour Packages
-            </button>
-            <button
-              onClick={() => onNavigate('/tickets')}
-              className="hover:text-emerald-700 flex items-center gap-1.5 cursor-pointer"
-            >
-              <TicketIcon className="w-4 h-4 text-rose-600" /> View All {tickets.length} Attraction E-Tickets
-            </button>
             <button
               onClick={() => onNavigate('/transport')}
               className="hover:text-emerald-700 flex items-center gap-1.5 cursor-pointer"
@@ -1120,25 +1473,32 @@ export default function MalaysiaHome({
               <Wrench className="w-4 h-4 text-amber-600" /> Custom Malaysia Itinerary Builder
             </button>
           </div>
+
+          <button
+            onClick={() => onNavigate('/hotels')}
+            className="text-xs font-bold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer"
+          >
+            View All {hotels.length} Direct Contracted Hotels <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
       </section>
 
       {/* =====================================================================
           3. ICONIC MALAYSIA DESTINATIONS BENTO SPOTLIGHT
       ===================================================================== */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-8 gap-4">
-          <div>
-            <p className="text-xs font-bold text-emerald-700 mb-2">
-              02. Destination Directory Across Peninsular &amp; East Malaysia
+      <section id={HOME_SECTIONS.destinations} className="scroll-mt-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 w-full">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-8 pb-4 border-b border-zinc-200 gap-4">
+          <div className="border-l-4 border-emerald-600 pl-4">
+            <p className="text-xs font-mono font-bold uppercase tracking-widest text-emerald-700 mb-1">
+              Destination Directory Across Peninsular &amp; East Malaysia
             </p>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-zinc-950 tracking-tight">
+            <h2 className="text-2xl sm:text-4xl font-black text-zinc-950 tracking-tight leading-tight">
               Explore Malaysia by Destination &amp; Starting Price
             </h2>
           </div>
           <button
             onClick={() => onNavigate('/search')}
-            className="text-xs font-bold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer self-start sm:self-auto"
+            className="text-xs font-bold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer self-start sm:self-auto shrink-0"
           >
             Explore Full Malaysia Directory <ArrowRight className="w-4 h-4" />
           </button>
@@ -1150,8 +1510,7 @@ export default function MalaysiaHome({
               key={dest.name}
               onClick={() => {
                 setSelectedLocation(dest.filterKey);
-                const el = document.getElementById('malaysia-priority-catalog');
-                if (el) el.scrollIntoView({ behavior: 'smooth' });
+                scrollToDesktopSection('packages', HOME_SECTIONS.packages);
               }}
               className={`group relative rounded-2xl overflow-hidden cursor-pointer border border-zinc-200 bg-zinc-900 ${
                 idx === 0 || idx === 3 ? 'md:col-span-2 h-72' : 'col-span-1 h-72'
@@ -1178,7 +1537,7 @@ export default function MalaysiaHome({
                   </p>
                   <div className="mt-4 pt-3 border-t border-white/15 flex items-center justify-between">
                     <span className="text-xs text-emerald-300 font-bold tabular-nums">
-                      Activities &amp; Packages from RM {dest.fromPrice.toLocaleString()}
+                      Activities &amp; Packages from {formatPrice(dest.fromPrice)}
                     </span>
                     <span className="text-xs font-bold text-white inline-flex items-center group-hover:translate-x-1 transition-transform">
                       View Experiences <ArrowRight className="w-3.5 h-3.5 ml-1" />
@@ -1194,15 +1553,15 @@ export default function MalaysiaHome({
       {/* =====================================================================
           4. CUSTOMER PHOTOS & VIDEOS SHOWCASE (SLIDING / CAROUSEL / BENTO / STORIES)
       ===================================================================== */}
-      <section className="bg-zinc-950 text-white py-20 my-12 border-y border-zinc-800 overflow-hidden">
+      <section id={HOME_SECTIONS.gallery} className="scroll-mt-24 bg-zinc-950 text-white py-20 my-12 border-y border-zinc-800 overflow-hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-10">
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-            <div>
-              <p className="text-xs font-bold text-emerald-400 mb-2">
-                03. Verified Guest Gallery · Photos &amp; Videos Across Malaysia
+          <div className="flex flex-col md:flex-row md:items-end justify-between pb-5 border-b border-zinc-800 gap-6">
+            <div className="border-l-4 border-emerald-500 pl-4">
+              <p className="text-xs font-mono font-bold uppercase tracking-widest text-emerald-400 mb-1">
+                Verified Guest Gallery · Photos &amp; Videos Across Malaysia
               </p>
               <h2
-                className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white"
+                className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight"
                 style={{ textWrap: 'balance' }}
               >
                 Real Travelers, Unforgettable Malaysian Moments
@@ -1502,20 +1861,20 @@ export default function MalaysiaHome({
           5. SOCIAL MEDIA PRESENCE & LIVE COMMUNITY HUB ON HOMEPAGE
       ===================================================================== */}
       {activeSocials.length > 0 && (
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 w-full">
-          <div className="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
-            <div>
-              <p className="text-xs font-bold text-emerald-700 mb-2">
-                04. Official Social Media Presence &amp; Daily Malaysia Dispatches
+        <section id={HOME_SECTIONS.social} className="scroll-mt-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 w-full">
+          <div className="flex flex-col md:flex-row md:items-end justify-between mb-10 pb-4 border-b border-zinc-200 gap-4">
+            <div className="border-l-4 border-emerald-600 pl-4">
+              <p className="text-xs font-mono font-bold uppercase tracking-widest text-emerald-700 mb-1">
+                Official Social Media Presence &amp; Daily Malaysia Dispatches
               </p>
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-zinc-950 tracking-tight">
+              <h2 className="text-2xl sm:text-4xl font-black text-zinc-950 tracking-tight leading-tight">
                 Follow GFK Holidays Malaysia Across Social Media
               </h2>
               <p className="text-zinc-600 text-sm sm:text-base mt-1.5 max-w-2xl">
                 Join over 500,000+ Malaysia travel lovers for daily 4K island drone reels, street food trails, live weather updates, and flash package deals.
               </p>
             </div>
-            <div className="flex items-center gap-2 text-xs font-bold text-zinc-600">
+            <div className="flex items-center gap-2 text-xs font-bold text-zinc-600 shrink-0">
               <Share2 className="w-4 h-4 text-emerald-700" />
               <span>Tag #GFKMalaysia to be featured on our homepage</span>
             </div>
@@ -1559,191 +1918,7 @@ export default function MalaysiaHome({
         </section>
       )}
 
-      {/* =====================================================================
-          6. END OF HOMEPAGE: DIRECT HOTEL CONTRACTS & GLOBAL OTA SUPPLIER PARTNERSHIPS
-      ===================================================================== */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 w-full border-t border-zinc-200">
-        {/* PART A: DIRECT MALAYSIA HOTEL CONTRACTS DISPLAY */}
-        <div className="mb-20">
-          <div className="flex flex-col lg:flex-row lg:items-end justify-between mb-8 gap-6">
-            <div>
-              <p className="text-xs font-bold text-emerald-700 mb-2">
-                05. Direct Hotelier Allotments &amp; Corporate Contracts
-              </p>
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-zinc-950 tracking-tight">
-                {settings.hotelContractsTitle ||
-                  'Direct Malaysia Hotel Contracts & Resort Allotments'}
-              </h2>
-              <p className="text-zinc-600 text-sm sm:text-base mt-1.5 max-w-2xl">
-                {settings.hotelContractsSubtitle ||
-                  'Pre-negotiated direct DMC hotel contracts across Kuala Lumpur, Langkawi, Genting Highlands & Penang. Instant room confirmation without middleman markups.'}
-              </p>
-            </div>
-
-            {/* Hotel Star/Category Filter */}
-            <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-zinc-100 rounded-xl border border-zinc-200/80 self-start">
-              {['ALL', '5-Star', '4-Star', 'Resort', '3-Star'].map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setHotelCategoryFilter(cat)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                    hotelCategoryFilter === cat
-                      ? 'bg-white text-zinc-950 shadow-sm'
-                      : 'text-zinc-600 hover:text-zinc-950'
-                  }`}
-                >
-                  {cat === 'ALL' ? 'All Contracted Hotels' : cat}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {settings.hotelContractsStyle === 'sliding' ? (
-            <div className="relative w-full overflow-hidden py-2">
-              <div className="flex gap-6 w-max gfk-marquee-track gfk-marquee-left-normal">
-                {[...filteredHotels, ...filteredHotels].map((ht, index) => {
-                  const img = resolveImage(ht.image, 'hotel');
-                  const safePrice = Number(ht.price) || 0;
-                  const commPct = Number(currentAgent?.commission) || 0;
-                  const displayPrice = currentAgent
-                    ? Math.round(safePrice * (1 - commPct / 100))
-                    : safePrice;
-                  const origPrice = Number(ht.originalPrice) || Math.round(safePrice * 1.28);
-                  return (
-                    <div
-                      key={`${ht.id}-${index}`}
-                      onClick={() => onNavigate('/package', { id: ht.id })}
-                      className="w-[320px] shrink-0 bg-white rounded-2xl border border-zinc-200 overflow-hidden hover:border-emerald-600 transition-all cursor-pointer group flex flex-col justify-between"
-                    >
-                      <div className="relative h-44 bg-zinc-900 overflow-hidden">
-                        <img
-                          src={img}
-                          alt={ht.name}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
-                        <div className="absolute bottom-3 left-4 right-4 flex justify-between text-xs text-white font-semibold">
-                          <span className="truncate">{ht.location || 'Kuala Lumpur, Malaysia'}</span>
-                          <span className="text-amber-300 shrink-0 ml-2">{ht.cat}</span>
-                        </div>
-                      </div>
-                      <div className="p-5">
-                        <div className="text-xs font-semibold text-emerald-700 mb-1">
-                          {ht.contractBadge || 'Direct DMC Contract Rate'}
-                        </div>
-                        <h3 className="text-base font-bold text-zinc-950 line-clamp-1">
-                          {ht.name}
-                        </h3>
-                        <p className="text-xs text-zinc-500 mt-1 line-clamp-2">
-                          {ht.instructions}
-                        </p>
-                        <div className="mt-4 pt-3 border-t border-zinc-100 flex items-end justify-between">
-                          <div>
-                            <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                              RM {(origPrice || 0).toLocaleString()}
-                            </span>
-                            <span className="text-base font-extrabold text-zinc-950 tabular-nums">
-                              RM {(displayPrice || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">/ night</span>
-                            </span>
-                          </div>
-                          <span className="text-xs font-bold text-emerald-700">Book Room →</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {filteredHotels.slice(0, 8).map((ht) => {
-                const img = resolveImage(ht.image, 'hotel');
-                const safePrice = Number(ht.price) || 0;
-                const commPct = Number(currentAgent?.commission) || 0;
-                const displayPrice = currentAgent
-                  ? Math.round(safePrice * (1 - commPct / 100))
-                  : safePrice;
-                const origPrice = Number(ht.originalPrice) || Math.round(safePrice * 1.28);
-
-                return (
-                  <div
-                    key={ht.id}
-                    onClick={() => onNavigate('/package', { id: ht.id })}
-                    className="bg-white rounded-2xl border border-zinc-200/90 overflow-hidden hover:border-emerald-600/60 transition-all cursor-pointer group flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="relative h-44 bg-zinc-900 overflow-hidden">
-                        <img
-                          src={img}
-                          alt={ht.name}
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.src = imageMap.hotel;
-                          }}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
-                        <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-xs text-white font-semibold">
-                          <span className="flex items-center truncate">
-                            <Building className="w-3.5 h-3.5 mr-1 text-amber-400 shrink-0" />
-                            <span className="truncate">{ht.location || 'Kuala Lumpur'}</span>
-                          </span>
-                          <span className="text-amber-300 shrink-0 ml-2">{ht.cat}</span>
-                        </div>
-                      </div>
-
-                      <div className="p-5">
-                        <div className="flex items-center gap-1.5 text-xs text-zinc-500 mb-1.5 tabular-nums">
-                          <span className="font-semibold text-emerald-700">
-                            {ht.contractBadge || 'Direct Hotel Contract'}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span>★ {ht.rating || 4.7}</span>
-                        </div>
-
-                        <h3 className="text-base font-bold text-zinc-950 group-hover:text-emerald-700 transition-colors line-clamp-1">
-                          {ht.name}
-                        </h3>
-
-                        <p className="text-xs text-zinc-500 mt-1.5 line-clamp-2">
-                          {ht.instructions}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="px-5 pb-5 pt-3 border-t border-zinc-100 flex items-end justify-between">
-                      <div>
-                        <span className="text-[11px] text-zinc-400 line-through block tabular-nums">
-                          OTA Rate RM {origPrice}
-                        </span>
-                        <div className="text-lg font-extrabold text-zinc-950 tabular-nums leading-none">
-                          RM {displayPrice}
-                          <span className="text-xs font-normal text-zinc-500"> / night</span>
-                        </div>
-                      </div>
-                      <span className="text-xs font-bold text-emerald-700 inline-flex items-center whitespace-nowrap">
-                        Contract Rate <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="mt-6 flex justify-end">
-            <button
-              onClick={() => onNavigate('/hotels')}
-              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer"
-            >
-              View All {hotels.length} Direct Contracted Hotels in Malaysia <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </section>
+      {/* Hotel contracts moved seamlessly into sequential section 04 above */}
 
 
       {/* =====================================================================
@@ -1820,59 +1995,12 @@ export default function MalaysiaHome({
         </div>
       )}
 
-      {/* Bottom Partner Photos Marquee Ticker (Controllable by Admin Portal) */}
-      {settings.partnerMarqueeEnabled !== false && (
-        <section className="bg-zinc-950 border-t border-b border-zinc-800 py-6 overflow-hidden mt-12">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-bold text-zinc-400">
-              <Award className="w-4 h-4 text-emerald-400" />
-              <span>Official Partners, OTAs &amp; Airlines Alliance Network</span>
-            </div>
-            <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-full border border-emerald-800/60">
-              Live Verified Ticker • {settings.partnerMarqueeDirection === 'right' ? 'Right-to-Left' : 'Left-to-Right'}
-            </span>
-          </div>
-          <div className="relative w-full overflow-hidden py-1">
-            <div
-              className={`flex gap-6 w-max gfk-marquee-track ${
-                settings.partnerMarqueeDirection === 'right'
-                  ? `gfk-marquee-right-${settings.partnerMarqueeSpeed || 'normal'}`
-                  : `gfk-marquee-left-${settings.partnerMarqueeSpeed || 'normal'}`
-              }`}
-            >
-              {[
-                ...(settings.partnerMarqueeLogos || []),
-                ...(settings.partnerMarqueeLogos || [])
-              ].map((logo, idx) => (
-                <div
-                  key={`${logo.id}-${idx}`}
-                  className="flex items-center gap-3 bg-zinc-900/90 border border-zinc-800 rounded-2xl px-4 py-3 shrink-0 shadow-sm hover:border-zinc-700 transition-colors"
-                >
-                  <div className="w-12 h-10 rounded-xl bg-zinc-950 border border-zinc-800 p-1 flex items-center justify-center shrink-0 overflow-hidden">
-                    <img
-                      src={logo.logoUrl}
-                      alt={logo.name}
-                      referrerPolicy="no-referrer"
-                      className="max-h-full max-w-full object-contain"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs font-extrabold text-white tracking-tight flex items-center gap-1.5">
-                      <span>{logo.name}</span>
-                      {logo.verified && (
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                      )}
-                    </div>
-                    <p className="text-[10px] text-zinc-400 font-medium">
-                      {logo.subtitle || logo.badgeText || 'Verified Partner'}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
+      {/* Right-to-Left Partner Preview Ticker */}
+      <PartnerAllianceSection
+        settings={settings}
+        onNavigate={onNavigate}
+        variant="desktop"
+      />
       </div>
     </div>
   );

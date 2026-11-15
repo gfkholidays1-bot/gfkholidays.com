@@ -42,8 +42,13 @@ export interface Booking {
   total: number;
   commission: number;
   status: 'CONFIRMED' | 'PENDING' | 'REQUEST_RECEIVED' | 'CANCELLED' | 'INVOICE_SENT' | 'PAID' | 'REJECTED';
-  paymentStatus?: 'PAID' | 'PENDING_BANK_TRANSFER' | 'CREDIT_CHARGED';
-  paymentMethod?: 'credit' | 'bank_transfer';
+  paymentStatus?: 'PAID' | 'PENDING_STRIPE' | 'PENDING_BANK_TRANSFER' | 'CREDIT_CHARGED';
+  paymentMethod?: 'stripe' | 'credit' | 'bank_transfer';
+  currency?: 'INR' | 'MYR' | 'USD' | 'SGD' | 'GBP' | 'EUR' | 'AED' | 'AUD';
+  xeRate?: number;
+  chargedAmount?: number;
+  chargedAmountInr?: number;
+  stripeSessionId?: string;
   agentId: string | null; // null for direct customers
   createdAt: string;
   invoiceSentAt?: string;
@@ -77,6 +82,9 @@ export interface Package {
   childPolicy?: string;
   childPrice?: number;
   featured?: boolean;
+  trending?: boolean;
+  viatorUrl?: string;
+  tripadvisorUrl?: string;
 }
 
 export interface TransportRoute {
@@ -96,6 +104,9 @@ export interface TransportRoute {
   importantInfo?: string;
   timings?: string;
   childPolicy?: string;
+  trending?: boolean;
+  viatorUrl?: string;
+  tripadvisorUrl?: string;
 }
 
 export interface Hotel {
@@ -118,6 +129,9 @@ export interface Hotel {
   timings?: string;
   childPolicy?: string;
   featuredContract?: boolean;
+  trending?: boolean;
+  viatorUrl?: string;
+  tripadvisorUrl?: string;
 }
 
 export interface Ticket {
@@ -140,6 +154,9 @@ export interface Ticket {
   timings?: string;
   childPolicy?: string;
   featured?: boolean;
+  trending?: boolean;
+  viatorUrl?: string;
+  tripadvisorUrl?: string;
 }
 
 export interface Allotment {
@@ -196,6 +213,8 @@ export interface OtaPartner {
   accentColor: string;
   url?: string;
   verified: boolean;
+  perks?: string[];
+  ctaLabel?: string;
 }
 
 export interface PartnerLogoItem {
@@ -207,6 +226,57 @@ export interface PartnerLogoItem {
   badgeText: string;
   accentColor?: string;
   verified?: boolean;
+}
+
+export interface AvailableFlight {
+  id: string;
+  flightNumber: string;
+  airline: string;
+  originCode: string;
+  originCity: string;
+  destinationCode: string;
+  destinationCity: string;
+  departureDate: string;
+  departureTime: string;
+  arrivalTime: string;
+  tripTitle?: string;
+  status: 'SCHEDULED' | 'ON TIME' | 'BOARDING' | 'LIMITED SEATS' | 'DELAYED' | 'DEPARTED';
+  seatsAvailable: number;
+  farePerPax: number;
+  cabinClass?: string;
+  baggage?: string;
+  notes?: string;
+}
+
+export interface FlightInquiry {
+  id: string;
+  airline: string;
+  flightCode?: string;
+  origin: string;
+  destination: string;
+  departureDate: string;
+  pax: number;
+  inquiryType: 'fare_quote' | 'schedule_baggage' | 'group_booking' | 'general_flight';
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  notes?: string;
+  targetEmail: string;
+  status: 'NEW' | 'QUOTED' | 'CLOSED';
+  createdAt: string;
+}
+
+export interface PackagePoster {
+  id: string;
+  title: string;
+  subtitle: string;
+  badge: string;
+  tag?: string;
+  imageUrl: string;
+  destination: string;
+  priceLabel: string;
+  validUntil?: string;
+  linkedPackageId?: string;
 }
 
 export interface GlobalSettings {
@@ -256,6 +326,10 @@ export interface GlobalSettings {
   customerMedia?: CustomerMediaItem[];
   socialChannels?: SocialMediaChannel[];
   otaPartners?: OtaPartner[];
+  otaSectionTitle?: string;
+  otaSectionSubtitle?: string;
+  availableFlights?: AvailableFlight[];
+  packagePosters?: PackagePoster[];
   seoTitle?: string;
   seoDescription?: string;
   seoKeywords?: string;
@@ -267,6 +341,7 @@ export interface GlobalSettings {
   customInvoiceHtml?: string;
   accountsEmail?: string;
   bookingEmail?: string;
+  flightsEmail?: string;
   bookingEmailToken?: string;
   accountsEmailToken?: string;
   partnerMarqueeEnabled?: boolean;
@@ -274,4 +349,10 @@ export interface GlobalSettings {
   partnerMarqueeSpeed?: 'slow' | 'normal' | 'fast';
   partnerMarqueeLogos?: PartnerLogoItem[];
   voucherDisplayMode?: 'payment_only' | 'homepage' | 'both' | 'hidden';
+  fxMarkupInr?: number;
+  fxMarkupPercent?: number;
+  fxIntlMarkupPercent?: number;
+  fxRefreshSeconds?: number;
+  fxUseManualRate?: boolean;
+  fxManualRateOverride?: number;
 }

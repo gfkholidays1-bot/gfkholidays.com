@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Home, Compass, Ticket, Building2, UtensilsCrossed, Car, Waves, Menu, X, Search, ChevronRight } from 'lucide-react';
 import { Agent } from '../types';
+import { HOME_SECTIONS } from '../lib/homeSections';
 
 interface MobileBottomNavProps {
   currentPath: string;
@@ -26,7 +27,13 @@ export default function MobileBottomNav({
   const isPackages = currentPath === '/search' || currentPath === '/ctfu-builder';
   const isTickets = currentPath === '/tickets';
   const isHotels = currentPath === '/hotels';
-  const isOther = currentPath === '/transport' || otherMenuOpen;
+  const isOther =
+    currentPath === '/transport' ||
+    currentPath === '/flights' ||
+    currentPath === '/restaurants' ||
+    currentPath === '/cruises' ||
+    currentPath === '/marketplaces' ||
+    otherMenuOpen;
 
   const handleSelectService = (path: string, params?: any) => {
     onNavigate(path, params);
@@ -96,6 +103,44 @@ export default function MobileBottomNav({
 
               <button
                 type="button"
+                onClick={() => handleSelectService(`/#${HOME_SECTIONS.flights}`)}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 hover:bg-emerald-50 border border-zinc-200 hover:border-emerald-300 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center font-bold text-lg">
+                    ✈️
+                  </div>
+                  <div className="text-left">
+                    <h4 className="text-xs font-black text-zinc-900 group-hover:text-emerald-800">Available Flights &amp; Live Status</h4>
+                    <p className="text-[11px] text-zinc-500">GFK fixed flight stock for upcoming trips</p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-emerald-700" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectService('/marketplaces')}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-400 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-bold text-lg shrink-0">
+                    🌐
+                  </div>
+                  <div className="text-left min-w-0">
+                    <h4 className="text-xs font-black text-zinc-950 group-hover:text-emerald-800 truncate">
+                      Marketplace Booking · Trending
+                    </h4>
+                    <p className="text-[11px] text-emerald-800 truncate">
+                      Viator, TripAdvisor, GetYourGuide &amp; Klook offers
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-emerald-700 shrink-0" />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleSelectService('/cruises')}
                 className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-zinc-50 hover:bg-emerald-50 border border-zinc-200 hover:border-emerald-300 transition-all cursor-pointer group"
               >
@@ -142,7 +187,7 @@ export default function MobileBottomNav({
           {/* Tab 2: Holidays */}
           <button
             type="button"
-            onClick={() => { setOtherMenuOpen(false); onNavigate('/search', { category: 'Packages' }); }}
+            onClick={() => { setOtherMenuOpen(false); onNavigate(`/#${HOME_SECTIONS.packages}`); }}
             className={`flex-1 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer ${
               isPackages && !otherMenuOpen ? 'text-emerald-700 font-extrabold' : 'text-zinc-500 hover:text-zinc-900 font-medium'
             }`}
@@ -159,7 +204,7 @@ export default function MobileBottomNav({
           {/* Tab 3: Tickets */}
           <button
             type="button"
-            onClick={() => { setOtherMenuOpen(false); onNavigate('/tickets'); }}
+            onClick={() => { setOtherMenuOpen(false); onNavigate(`/#${HOME_SECTIONS.tickets}`); }}
             className={`flex-1 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer ${
               isTickets && !otherMenuOpen ? 'text-emerald-700 font-extrabold' : 'text-zinc-500 hover:text-zinc-900 font-medium'
             }`}
@@ -176,7 +221,7 @@ export default function MobileBottomNav({
           {/* Tab 4: Hotels */}
           <button
             type="button"
-            onClick={() => { setOtherMenuOpen(false); onNavigate('/hotels'); }}
+            onClick={() => { setOtherMenuOpen(false); onNavigate(`/#${HOME_SECTIONS.hotels}`); }}
             className={`flex-1 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer ${
               isHotels && !otherMenuOpen ? 'text-emerald-700 font-extrabold' : 'text-zinc-500 hover:text-zinc-900 font-medium'
             }`}

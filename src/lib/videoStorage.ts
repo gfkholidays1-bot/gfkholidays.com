@@ -15,6 +15,7 @@ import {
 const DB_NAME = 'gfk_video_storage_db';
 const DB_VERSION = 2;
 const STORE_NAME = 'videos';
+const HERO_VIDEO_CACHE_NAME = 'gfk-hero-video-v1';
 
 export const UNIFIED_VIDEO_STORAGE_KEY = 'hero_background_video';
 
@@ -46,6 +47,326 @@ export interface StorageAuditResult {
 }
 
 const activeBlobUrls = new Map<string, { url: string; size: number; fileName?: string }>();
+const httpCachedBlobUrls = new Map<string, string>();
+const cachingInFlight = new Set<string>();
+let bootWarmed = false;
+
+export function getHeroPosterCache(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem('gfk_hero_poster_image') || null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+export function saveHeroPosterCache(posterUrl?: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (posterUrl) {
+      localStorage.setItem('gfk_hero_poster_image', posterUrl);
+    } else {
+      localStorage.removeItem('gfk_hero_poster_image');
+    }
+  } catch (_e) {}
+}
+
+export function getWarmMemoryBlobUrl(
+  key: string = UNIFIED_VIDEO_STORAGE_KEY,
+  expectedCloudFileName?: string
+): string | null {
+  const cached = activeBlobUrls.get(key);
+  if (
+    cached &&
+    cached.url &&
+    (!expectedCloudFileName || !cached.fileName || cached.fileName === expectedCloudFileName)
+  ) {
+    return cached.url;
+  }
+  return null;
+}
+
+export function getWarmHttpBlobUrl(httpUrl?: string | null): string | null {
+  if (!httpUrl) return null;
+  return httpCachedBlobUrls.get(httpUrl) || null;
+}
+
+export async function getCachedPlayableVideoUrl(httpUrl: string): Promise<string> {
+  if (typeof window === 'undefined' || !isUniversalHttpVideoUrl(httpUrl)) {
+    return httpUrl;
+  }
+  const warmMem = httpCachedBlobUrls.get(httpUrl);
+  if (warmMem) return warmMem;
+
+  if (typeof caches !== 'undefined') {
+    try {
+      const cache = await caches.open(HERO_VIDEO_CACHE_NAME);
+      const matched = await cache.match(httpUrl);
+      if (matched && matched.ok) {
+        const blob = await matched.blob();
+        if (blob && blob.size > 1024) {
+          const objUrl = URL.createObjectURL(blob);
+          httpCachedBlobUrls.set(httpUrl, objUrl);
+          return objUrl;
+        }
+      }
+    } catch (_e) {}
+  }
+  return httpUrl;
+}
+
+export async function cacheHttpVideoInBackground(httpUrl?: string | null): Promise<void> {
+  if (
+    typeof window === 'undefined' ||
+    typeof caches === 'undefined' ||
+    !httpUrl ||
+    !isUniversalHttpVideoUrl(httpUrl) ||
+    httpCachedBlobUrls.has(httpUrl) ||
+    cachingInFlight.has(httpUrl)
+  ) {
+    return;
+  }
+
+  cachingInFlight.add(httpUrl);
+  try {
+    const cache = await caches.open(HERO_VIDEO_CACHE_NAME);
+    const existing = await cache.match(httpUrl);
+    if (existing && existing.ok) {
+      const blob = await existing.blob();
+      if (blob && blob.size > 1024 && !httpCachedBlobUrls.has(httpUrl)) {
+        httpCachedBlobUrls.set(httpUrl, URL.createObjectURL(blob));
+      }
+      return;
+    }
+
+    const res = await fetch(httpUrl, { mode: 'cors', credentials: 'omit' });
+    if (res.ok && res.type !== 'opaque') {
+      const lenHeader = Number(res.headers.get('content-length') || 0);
+      // Only persist up to 65MB in browser Cache API so mobile storage stays healthy
+      if (!lenHeader || lenHeader <= 65 * 1024 * 1024) {
+        const cloneForCache = res.clone();
+        const blob = await res.blob();
+        if (blob.size > 1024 && blob.size <= 65 * 1024 * 1024) {
+          await cache.put(httpUrl, cloneForCache);
+          if (!httpCachedBlobUrls.has(httpUrl)) {
+            httpCachedBlobUrls.set(httpUrl, URL.createObjectURL(blob));
+          }
+        }
+      }
+    }
+  } catch (_e) {
+  } finally {
+    cachingInFlight.delete(httpUrl);
+  }
+}
+
+export async function clearHttpVideoCache(): Promise<void> {
+  httpCachedBlobUrls.forEach((blobUrl) => {
+    try {
+      URL.revokeObjectURL(blobUrl);
+    } catch (_e) {}
+  });
+  httpCachedBlobUrls.clear();
+  if (typeof caches !== 'undefined') {
+    try {
+      await caches.delete(HERO_VIDEO_CACHE_NAME);
+    } catch (_e) {}
+  }
+}
+
+/**
+ * Extract a lightweight compressed WebP poster frame from a Blob/File or CORS-enabled video URL
+ * so desktop & mobile hero render frame-0 in 0ms before video buffers.
+ */
+export async function extractVideoPosterFrame(
+  blobOrUrl: Blob | string,
+  maxWidth = 960
+): Promise<string | null> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+
+  let tempObjectUrl: string | null = null;
+  const videoSrc =
+    blobOrUrl instanceof Blob
+      ? (tempObjectUrl = URL.createObjectURL(blobOrUrl))
+      : blobOrUrl;
+
+  if (!videoSrc || videoSrc.startsWith('firestore-video://')) return null;
+
+  return await new Promise<string | null>((resolve) => {
+    const video = document.createElement('video');
+    let settled = false;
+
+    const cleanup = () => {
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      } catch (_e) {}
+      if (tempObjectUrl) {
+        try {
+          URL.revokeObjectURL(tempObjectUrl);
+        } catch (_e) {}
+      }
+    };
+
+    const done = (val: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      resolve(val);
+    };
+
+    const timer = setTimeout(() => done(null), 5500);
+
+    if (typeof blobOrUrl === 'string' && isUniversalHttpVideoUrl(blobOrUrl)) {
+      video.crossOrigin = 'anonymous';
+    }
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+
+    const captureFrame = () => {
+      try {
+        const vw = video.videoWidth || 0;
+        const vh = video.videoHeight || 0;
+        if (!vw || !vh) {
+          done(null);
+          return;
+        }
+        const scale = vw > maxWidth ? maxWidth / vw : 1;
+        const w = Math.max(1, Math.round(vw * scale));
+        const h = Math.max(1, Math.round(vh * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          done(null);
+          return;
+        }
+        ctx.drawImage(video, 0, 0, w, h);
+        let dataUrl = canvas.toDataURL('image/webp', 0.72);
+        if (!dataUrl.startsWith('data:image/webp')) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        }
+        // Keep well inside Firestore settings/global document footprint (< 180KB)
+        if (dataUrl.length > 180000) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.58);
+        }
+        done(dataUrl.length <= 220000 ? dataUrl : null);
+      } catch (_e) {
+        done(null);
+      }
+    };
+
+    video.onloadeddata = () => {
+      try {
+        if (video.duration && video.duration > 0.25) {
+          video.currentTime = Math.min(0.25, video.duration / 4);
+        } else {
+          captureFrame();
+        }
+      } catch (_e) {
+        captureFrame();
+      }
+    };
+    video.onseeked = captureFrame;
+    video.onerror = () => done(null);
+    video.src = videoSrc;
+  });
+}
+
+/**
+ * Boot-time pre-warmer called in main.tsx before React renders so IndexedDB/Cache API
+ * video blobs are already ready when Hero mounts.
+ */
+export function warmBootVideoCache(): void {
+  if (typeof window === 'undefined' || bootWarmed) return;
+  bootWarmed = true;
+
+  try {
+    let cachedUrl = localStorage.getItem('gfk_hero_video_url') || '';
+    let cachedSource = getVideoSourceMode();
+    let cachedFileName = localStorage.getItem('gfk_video_name_hero_background_video') || '';
+    let cachedPoster = '';
+
+    const rawSettings = localStorage.getItem('gfk_cache_settings');
+    if (rawSettings) {
+      try {
+        const parsed = JSON.parse(rawSettings);
+        const globalDoc = Array.isArray(parsed)
+          ? parsed.find((item: any) => item?.id === 'global')
+          : null;
+        if (globalDoc) {
+          if (globalDoc.heroVideoUrl) cachedUrl = globalDoc.heroVideoUrl;
+          if (globalDoc.heroVideoSource === 'upload' || globalDoc.heroVideoSource === 'url') {
+            cachedSource = globalDoc.heroVideoSource;
+          }
+          if (globalDoc.heroVideoFileName) cachedFileName = globalDoc.heroVideoFileName;
+          if (globalDoc.heroFallbackImage) cachedPoster = globalDoc.heroFallbackImage;
+        }
+      } catch (_e) {}
+    }
+
+    if (cachedPoster) {
+      saveHeroPosterCache(cachedPoster);
+    }
+
+    if (cachedUrl && isUniversalHttpVideoUrl(cachedUrl)) {
+      getCachedPlayableVideoUrl(cachedUrl).then((resolved) => {
+        if (resolved && resolved.startsWith('blob:')) {
+          window.dispatchEvent(
+            new CustomEvent('gfk-video-updated', {
+              detail: {
+                key: UNIFIED_VIDEO_STORAGE_KEY,
+                videoUrl: resolved,
+                serverUrl: cachedUrl,
+                sourceMode: cachedSource,
+                fileName: cachedFileName
+              }
+            })
+          );
+        } else {
+          cacheHttpVideoInBackground(cachedUrl).catch(() => {});
+        }
+      });
+      return;
+    }
+
+    if (cachedSource === 'upload' || isUploadedVideoUrl(cachedUrl)) {
+      openVideoDatabase()
+        .then((db) => {
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const store = tx.objectStore(STORE_NAME);
+          const req = store.get(UNIFIED_VIDEO_STORAGE_KEY);
+          req.onsuccess = (ev: any) => {
+            const b = ev.target?.result;
+            if (b instanceof Blob && !activeBlobUrls.has(UNIFIED_VIDEO_STORAGE_KEY)) {
+              const objUrl = URL.createObjectURL(b);
+              activeBlobUrls.set(UNIFIED_VIDEO_STORAGE_KEY, {
+                url: objUrl,
+                size: b.size,
+                fileName: cachedFileName
+              });
+              window.dispatchEvent(
+                new CustomEvent('gfk-video-updated', {
+                  detail: {
+                    key: UNIFIED_VIDEO_STORAGE_KEY,
+                    videoUrl: objUrl,
+                    serverUrl: cachedUrl || objUrl,
+                    sourceMode: 'upload',
+                    fileName: cachedFileName
+                  }
+                })
+              );
+            }
+          };
+        })
+        .catch(() => {});
+    }
+  } catch (_e) {}
+}
 
 export function isUploadedVideoUrl(url?: string | null): boolean {
   if (!url) return false;
@@ -189,7 +510,13 @@ export async function patchFirestoreVideoSettings(
   videoUrl: string,
   fileName: string,
   sourceMode: 'upload' | 'url',
-  extraMeta?: { chunkCount?: number; version?: number; mimeType?: string; sizeBytes?: number }
+  extraMeta?: {
+    chunkCount?: number;
+    version?: number;
+    mimeType?: string;
+    sizeBytes?: number;
+    posterDataUrl?: string | null;
+  }
 ): Promise<boolean> {
   try {
     const baseUrl = getFirestoreRestBaseUrl();
@@ -225,6 +552,11 @@ export async function patchFirestoreVideoSettings(
     if (extraMeta?.sizeBytes !== undefined) {
       maskFields.push('heroVideoSize');
       fields.heroVideoSize = { integerValue: String(extraMeta.sizeBytes) };
+    }
+    if (extraMeta?.posterDataUrl) {
+      maskFields.push('heroFallbackImage');
+      fields.heroFallbackImage = { stringValue: extraMeta.posterDataUrl };
+      saveHeroPosterCache(extraMeta.posterDataUrl);
     }
 
     const maskParams = maskFields.map((f) => `updateMask.fieldPaths=${f}`).join('&');
@@ -272,7 +604,8 @@ export async function uploadVideoToFirebaseStorage(
 
     return await new Promise<{ url: string | null; rulesLocked?: boolean }>((resolve) => {
       const task = uploadBytesResumable(storageRef, blob, {
-        contentType: blob.type || 'video/mp4'
+        contentType: blob.type || 'video/mp4',
+        cacheControl: 'public, max-age=31536000, immutable'
       });
 
       let settled = false;
@@ -508,7 +841,7 @@ export async function downloadVideoFromFirestoreChunks(
     }
 
     const orderedChunks: Uint8Array[] = new Array(totalChunks);
-    const BATCH_CONCURRENCY = 4;
+    const BATCH_CONCURRENCY = 16;
 
     for (let batchStart = 0; batchStart < totalChunks; batchStart += BATCH_CONCURRENCY) {
       const indices: number[] = [];
@@ -552,7 +885,8 @@ export async function uploadVideoToServer(
   storageKey: string,
   blob: Blob,
   fileName: string,
-  onProgress?: (percent: number, loadedMb: string, totalMb: string, stageNote?: string) => void
+  onProgress?: (percent: number, loadedMb: string, totalMb: string, stageNote?: string) => void,
+  posterDataUrl?: string | null
 ): Promise<{
   url: string | null;
   backend: 'firebase-storage' | 'firestore-chunks' | 'local';
@@ -577,8 +911,11 @@ export async function uploadVideoToServer(
       chunkCount: 0,
       version,
       mimeType: videoType,
-      sizeBytes: totalBytes
+      sizeBytes: totalBytes,
+      posterDataUrl
     });
+    // Pre-seed Cache API on uploader browser too for instant 0ms local playback
+    cacheHttpVideoInBackground(storageRes.url).catch(() => {});
     if (onProgress) {
       onProgress(100, totalMb, totalMb, 'Published to Firebase Storage CDN');
     }
@@ -605,7 +942,8 @@ export async function uploadVideoToServer(
       chunkCount: firestoreChunkResult.totalChunks,
       version,
       mimeType: videoType,
-      sizeBytes: totalBytes
+      sizeBytes: totalBytes,
+      posterDataUrl
     });
 
     if (onProgress) {
@@ -690,6 +1028,7 @@ export async function saveVideoBlob(
   serverUrl: string | null;
   fileName: string;
   backend: 'firebase-storage' | 'firestore-chunks' | 'local';
+  posterDataUrl?: string | null;
   errorReason?: string;
 }> {
   const id = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -702,23 +1041,39 @@ export async function saveVideoBlob(
   activeBlobUrls.set('featured_attractions_video', { url: objectUrl, size: blob.size, fileName });
   activeBlobUrls.set(storageKey, { url: objectUrl, size: blob.size, fileName });
 
-  try {
-    const db = await openVideoDatabase();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.put(blob, 'hero_background_video');
-      store.put(blob, 'featured_attractions_video');
-      store.put(blob, storageKey);
-      store.put(blob, id);
-      tx.oncomplete = () => resolve();
-      tx.onerror = (e: any) => reject(e.target.error);
-    });
-  } catch (err) {
-    console.warn('[videoStorage] IndexedDB write warning:', err);
+  // Extract instant WebP poster frame at frame-0 while saving to IndexedDB
+  const [posterDataUrl] = await Promise.all([
+    extractVideoPosterFrame(blob).catch(() => null),
+    (async () => {
+      try {
+        const db = await openVideoDatabase();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          const store = tx.objectStore(STORE_NAME);
+          store.put(blob, 'hero_background_video');
+          store.put(blob, 'featured_attractions_video');
+          store.put(blob, storageKey);
+          store.put(blob, id);
+          tx.oncomplete = () => resolve();
+          tx.onerror = (e: any) => reject(e.target.error);
+        });
+      } catch (err) {
+        console.warn('[videoStorage] IndexedDB write warning:', err);
+      }
+    })()
+  ]);
+
+  if (posterDataUrl) {
+    saveHeroPosterCache(posterDataUrl);
   }
 
-  const uploadResult = await uploadVideoToServer('hero_background_video', blob, fileName, onProgress);
+  const uploadResult = await uploadVideoToServer(
+    'hero_background_video',
+    blob,
+    fileName,
+    onProgress,
+    posterDataUrl
+  );
 
   const persistentUrl = uploadResult.url;
   try {
@@ -769,7 +1124,112 @@ export async function saveVideoBlob(
     serverUrl: persistentUrl,
     fileName,
     backend: uploadResult.backend,
+    posterDataUrl,
     errorReason: uploadResult.errorReason
+  };
+}
+
+/**
+ * Promote an existing `firestore-video://` uploaded video (saved during Storage Production Mode 403)
+ * up to Firebase Storage CDN for instant HTTP 206 streaming across mobile & desktop browsers.
+ */
+export async function migrateCachedVideoToFirebaseStorage(
+  expectedFileName?: string,
+  onProgress?: (percent: number, loadedMb: string, totalMb: string, stageNote?: string) => void
+): Promise<{
+  ok: boolean;
+  url?: string;
+  fileName?: string;
+  posterDataUrl?: string | null;
+  reason?: string;
+}> {
+  if (typeof window === 'undefined') {
+    return { ok: false, reason: 'Client environment required.' };
+  }
+
+  let targetBlob: Blob | null = null;
+  let resolvedName =
+    expectedFileName ||
+    localStorage.getItem('gfk_video_name_hero_background_video') ||
+    'hero-video.mp4';
+
+  try {
+    const db = await openVideoDatabase();
+    targetBlob = await new Promise<Blob | null>((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get(UNIFIED_VIDEO_STORAGE_KEY);
+      req.onsuccess = (ev: any) => resolve(ev.target?.result instanceof Blob ? ev.target.result : null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (_e) {}
+
+  if (!targetBlob) {
+    const downloaded = await downloadVideoFromFirestoreChunks(
+      UNIFIED_VIDEO_STORAGE_KEY,
+      expectedFileName
+    );
+    if (downloaded) {
+      targetBlob = downloaded.blob;
+      resolvedName = downloaded.fileName || resolvedName;
+    }
+  }
+
+  if (!targetBlob) {
+    return {
+      ok: false,
+      reason: 'Could not locate cached video binary to promote. Please re-upload the video file.'
+    };
+  }
+
+  const storageRes = await uploadVideoToFirebaseStorage(
+    UNIFIED_VIDEO_STORAGE_KEY,
+    targetBlob,
+    resolvedName,
+    onProgress
+  );
+
+  if (!storageRes.url) {
+    return {
+      ok: false,
+      reason: storageRes.rulesLocked
+        ? 'Firebase Storage Rules still deny writes (HTTP 403). Publish the cms-videos/ rules in Firebase Console -> Storage -> Rules first.'
+        : storageRes.bucketMissing
+        ? 'Firebase Storage bucket is not initialized yet.'
+        : 'Firebase Storage upload did not complete.'
+    };
+  }
+
+  const posterDataUrl =
+    getHeroPosterCache() || (await extractVideoPosterFrame(targetBlob).catch(() => null));
+
+  await patchFirestoreVideoSettings(storageRes.url, resolvedName, 'upload', {
+    chunkCount: 0,
+    version: Date.now(),
+    mimeType: targetBlob.type || 'video/mp4',
+    sizeBytes: targetBlob.size,
+    posterDataUrl
+  });
+
+  setVideoSourceMode('upload', storageRes.url, resolvedName);
+  cacheHttpVideoInBackground(storageRes.url).catch(() => {});
+
+  const list = getStoredVideosList(UNIFIED_VIDEO_STORAGE_KEY).map((item) =>
+    item.isActive
+      ? {
+          ...item,
+          url: storageRes.url!,
+          serverUrl: storageRes.url!,
+          storageBackend: 'firebase-storage' as const
+        }
+      : item
+  );
+  saveStoredVideosList(UNIFIED_VIDEO_STORAGE_KEY, list);
+
+  return {
+    ok: true,
+    url: storageRes.url,
+    fileName: resolvedName,
+    posterDataUrl
   };
 }
 
@@ -780,7 +1240,7 @@ export async function registerUrlInLibrary(
   storageKey: string,
   url: string,
   customLabel?: string
-): Promise<void> {
+): Promise<string | null> {
   setVideoSourceMode('url');
   activeBlobUrls.clear();
   await deleteVideoBlob('hero_background_video');
@@ -791,7 +1251,12 @@ export async function registerUrlInLibrary(
     localStorage.setItem('gfk_featured_video_url', url);
   } catch (_e) {}
 
-  await patchFirestoreVideoSettings(url, customLabel || '', 'url', { chunkCount: 0 });
+  const posterDataUrl = await extractVideoPosterFrame(url).catch(() => null);
+  await patchFirestoreVideoSettings(url, customLabel || '', 'url', {
+    chunkCount: 0,
+    posterDataUrl
+  });
+  cacheHttpVideoInBackground(url).catch(() => {});
 
   const existing = getStoredVideosList(storageKey);
   const updatedList: StoredVideoItem[] = existing.map((item) => ({
@@ -833,6 +1298,7 @@ export async function registerUrlInLibrary(
   }
 
   saveStoredVideosList(storageKey, updatedList);
+  return posterDataUrl;
 }
 
 export async function evictStaleLocalVideoIfMismatch(cloudFileName?: string): Promise<boolean> {
@@ -878,9 +1344,13 @@ export async function loadVideoBlob(
 ): Promise<string | null> {
   if (typeof window === 'undefined') return null;
 
-  // Universal HTTPS CDN URLs stream directly without local IndexedDB lookups
+  // Universal HTTPS CDN URLs check Cache API for 0ms instant disk playback, otherwise stream immediately
   if (cloudVideoUrl && isUniversalHttpVideoUrl(cloudVideoUrl)) {
-    return cloudVideoUrl;
+    const cachedUrl = await getCachedPlayableVideoUrl(cloudVideoUrl);
+    if (cachedUrl === cloudVideoUrl) {
+      cacheHttpVideoInBackground(cloudVideoUrl).catch(() => {});
+    }
+    return cachedUrl;
   }
 
   if (expectedCloudFileName) {
@@ -1237,6 +1707,8 @@ export async function purgeAllVideoStorage(): Promise<{ purgedCount: number }> {
   });
 
   setVideoSourceMode('url');
+  saveHeroPosterCache(null);
+  await clearHttpVideoCache();
 
   return { purgedCount };
 }
