@@ -120,6 +120,64 @@ async function fetchFirestoreDocOnServer(collectionName: string, docId: string):
   return null;
 }
 
+function toFirestoreFieldValue(val: any): any {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+  }
+  if (typeof val === 'string') return { stringValue: val };
+  if (Array.isArray(val)) {
+    return {
+      arrayValue: {
+        values: val.map((item) => toFirestoreFieldValue(item))
+      }
+    };
+  }
+  if (typeof val === 'object') {
+    const fields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) {
+        fields[k] = toFirestoreFieldValue(v);
+      }
+    }
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+}
+
+async function saveFirestoreDocOnServer(
+  collectionName: string,
+  docId: string,
+  payload: Record<string, any>
+): Promise<{ ok: boolean; error?: string }> {
+  const { baseUrl, apiKey } = getFirestoreBaseUrl();
+  const docUrl = `${baseUrl}/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
+  const keyParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+
+  const fields: Record<string, any> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (v !== undefined) {
+      fields[k] = toFirestoreFieldValue(v);
+    }
+  }
+
+  try {
+    const res = await fetch(`${docUrl}${keyParam}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields })
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return { ok: false, error: `Firestore HTTP ${res.status}: ${errText.slice(0, 140)}` };
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error writing Firestore document' };
+  }
+}
+
 async function runQueryCollectionOnServer(collectionName: string, limit = 200): Promise<any[] | null> {
   const { baseUrl, apiKey } = getFirestoreBaseUrl();
   const keyParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
@@ -782,33 +840,87 @@ async function startServer() {
     error?: string;
   }
 
-  const readServerSmtpConfig = (): ServerSmtpConfig => {
-    let saved: Partial<ServerSmtpConfig> = {};
+  let memorySmtpCache: ServerSmtpConfig | null = null;
+  let memorySmtpFetchedAt = 0;
+
+  const readLocalSmtpConfig = (): Partial<ServerSmtpConfig> => {
     try {
       if (fs.existsSync(SMTP_CONFIG_FILE)) {
-        saved = JSON.parse(fs.readFileSync(SMTP_CONFIG_FILE, 'utf-8')) || {};
+        return JSON.parse(fs.readFileSync(SMTP_CONFIG_FILE, 'utf-8')) || {};
       }
     } catch (_e) {}
+    return {};
+  };
+
+  const normalizeSmtpConfig = (saved: Partial<ServerSmtpConfig>): ServerSmtpConfig => ({
+    smtpHost: String(saved.smtpHost || process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
+    smtpPort: String(saved.smtpPort || process.env.SMTP_PORT || '465').trim(),
+    smtpUser: String(saved.smtpUser || process.env.SMTP_USER || '').trim(),
+    smtpPass: String(saved.smtpPass || process.env.SMTP_PASS || '').trim(),
+    fromEmail: String(
+      saved.fromEmail || process.env.SMTP_FROM || saved.smtpUser || process.env.SMTP_USER || 'booking@gfkholidays.com'
+    ).trim(),
+    fromName: String(saved.fromName || process.env.SMTP_FROM_NAME || 'GFK Holidays Malaysia').trim(),
+    updatedAt: saved.updatedAt
+  });
+
+  const writeLocalSmtpConfig = (next: ServerSmtpConfig) => {
+    memorySmtpCache = next;
+    memorySmtpFetchedAt = Date.now();
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(SMTP_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[SMTP] Non-fatal local disk write warning:', err);
+    }
+  };
+
+  const readServerSmtpConfigAsync = async (forceRefresh = false): Promise<{
+    config: ServerSmtpConfig;
+    persistedInDatabase: boolean;
+  }> => {
+    const localSaved = memorySmtpCache || readLocalSmtpConfig();
+    const cacheFresh = memorySmtpCache && Date.now() - memorySmtpFetchedAt < 60_000;
+    const hasLocalCreds = Boolean(localSaved?.smtpUser && localSaved?.smtpPass);
+
+    if (!forceRefresh && cacheFresh && hasLocalCreds) {
+      return { config: normalizeSmtpConfig(localSaved), persistedInDatabase: true };
+    }
+
+    try {
+      const firestoreDoc = await fetchFirestoreDocOnServer('email_config', 'smtp');
+      if (firestoreDoc?.fields) {
+        const parsed = parseFirestoreDoc(firestoreDoc);
+        const merged: ServerSmtpConfig = normalizeSmtpConfig({
+          ...localSaved,
+          smtpHost: parsed.smtpHost ?? localSaved.smtpHost,
+          smtpPort: parsed.smtpPort ?? localSaved.smtpPort,
+          smtpUser: parsed.smtpUser ?? localSaved.smtpUser,
+          smtpPass: parsed.smtpPass ?? localSaved.smtpPass,
+          fromEmail: parsed.fromEmail ?? localSaved.fromEmail,
+          fromName: parsed.fromName ?? localSaved.fromName,
+          updatedAt: parsed.updatedAt ?? localSaved.updatedAt
+        });
+        writeLocalSmtpConfig(merged);
+        return {
+          config: merged,
+          persistedInDatabase: Boolean(parsed.smtpUser && parsed.smtpPass)
+        };
+      }
+    } catch (err) {
+      console.warn('[SMTP] Firestore read fallback to local config:', err);
+    }
 
     return {
-      smtpHost: String(saved.smtpHost || process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
-      smtpPort: String(saved.smtpPort || process.env.SMTP_PORT || '465').trim(),
-      smtpUser: String(saved.smtpUser || process.env.SMTP_USER || '').trim(),
-      smtpPass: String(saved.smtpPass || process.env.SMTP_PASS || '').trim(),
-      fromEmail: String(
-        saved.fromEmail || process.env.SMTP_FROM || saved.smtpUser || process.env.SMTP_USER || 'booking@gfkholidays.com'
-      ).trim(),
-      fromName: String(saved.fromName || process.env.SMTP_FROM_NAME || 'GFK Holidays Malaysia').trim(),
-      updatedAt: saved.updatedAt
+      config: normalizeSmtpConfig(localSaved),
+      persistedInDatabase: false
     };
   };
 
-  const writeServerSmtpConfig = (next: ServerSmtpConfig) => {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(SMTP_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf-8');
-  };
+  // Warm SMTP config cache from Firestore immediately on server boot
+  readServerSmtpConfigAsync(true).catch(() => {});
 
   const readMailLogs = (): MailDispatchLog[] => {
     try {
@@ -820,6 +932,28 @@ async function startServer() {
     return [];
   };
 
+  const readMailLogsAsync = async (): Promise<MailDispatchLog[]> => {
+    const localLogs = readMailLogs();
+    try {
+      const docJson = await fetchFirestoreDocOnServer('email_config', 'mail_logs');
+      const itemsJson = docJson?.fields?.itemsJson?.stringValue;
+      if (itemsJson) {
+        const parsed = JSON.parse(itemsJson);
+        if (Array.isArray(parsed)) {
+          const mergedMap = new Map<string, MailDispatchLog>();
+          for (const item of [...localLogs, ...parsed]) {
+            if (item?.id) mergedMap.set(item.id, item);
+          }
+          const combined = Array.from(mergedMap.values())
+            .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+            .slice(0, 200);
+          return combined;
+        }
+      }
+    } catch (_e) {}
+    return localLogs;
+  };
+
   const appendMailLog = (entry: MailDispatchLog) => {
     try {
       if (!fs.existsSync(DATA_DIR)) {
@@ -828,6 +962,11 @@ async function startServer() {
       const existing = readMailLogs();
       const next = [entry, ...existing].slice(0, 200);
       fs.writeFileSync(MAIL_LOGS_FILE, JSON.stringify(next, null, 2), 'utf-8');
+      saveFirestoreDocOnServer('email_config', 'mail_logs', {
+        id: 'mail_logs',
+        itemsJson: JSON.stringify(next),
+        updatedAt: new Date().toISOString()
+      }).catch(() => {});
     } catch (err) {
       console.warn('[Mail Logs] Failed writing mail dispatch log:', err);
     }
@@ -849,12 +988,13 @@ async function startServer() {
     });
   };
 
-  app.get('/api/smtp-config', (_req, res) => {
+  app.get('/api/smtp-config', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    const cfg = readServerSmtpConfig();
+    const { config: cfg, persistedInDatabase } = await readServerSmtpConfigAsync(true);
     return res.json({
       ok: true,
       configured: Boolean((cfg.smtpUser && cfg.smtpPass) || process.env.RESEND_API_KEY),
+      persistedInDatabase,
       smtpHost: cfg.smtpHost,
       smtpPort: cfg.smtpPort,
       smtpUser: cfg.smtpUser,
@@ -868,7 +1008,7 @@ async function startServer() {
 
   app.post('/api/smtp-config', async (req, res) => {
     try {
-      const current = readServerSmtpConfig();
+      const { config: current } = await readServerSmtpConfigAsync(true);
       const body = req.body || {};
       const next: ServerSmtpConfig = {
         smtpHost: String(body.smtpHost ?? current.smtpHost ?? 'smtp.gmail.com').trim(),
@@ -885,12 +1025,24 @@ async function startServer() {
         updatedAt: new Date().toISOString()
       };
 
-      writeServerSmtpConfig(next);
+      writeLocalSmtpConfig(next);
+
+      const dbSave = await saveFirestoreDocOnServer('email_config', 'smtp', {
+        id: 'smtp',
+        smtpHost: next.smtpHost,
+        smtpPort: next.smtpPort,
+        smtpUser: next.smtpUser,
+        smtpPass: next.smtpPass,
+        fromEmail: next.fromEmail,
+        fromName: next.fromName,
+        updatedAt: next.updatedAt
+      });
 
       if (body.verify) {
         if (!next.smtpUser || !next.smtpPass) {
           return res.status(400).json({
             ok: false,
+            persistedInDatabase: dbSave.ok,
             code: 'SMTP_MISSING_CREDENTIALS',
             error: 'Please enter both SMTP username and app password before verifying.'
           });
@@ -907,6 +1059,8 @@ async function startServer() {
       return res.json({
         ok: true,
         configured: Boolean((next.smtpUser && next.smtpPass) || process.env.RESEND_API_KEY),
+        persistedInDatabase: dbSave.ok,
+        databaseError: dbSave.ok ? null : dbSave.error,
         smtpHost: next.smtpHost,
         smtpPort: next.smtpPort,
         smtpUser: next.smtpUser,
@@ -924,16 +1078,22 @@ async function startServer() {
     }
   });
 
-  app.get('/api/mail-logs', (_req, res) => {
+  app.get('/api/mail-logs', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ ok: true, logs: readMailLogs() });
+    const logs = await readMailLogsAsync();
+    return res.json({ ok: true, logs });
   });
 
-  app.delete('/api/mail-logs', (_req, res) => {
+  app.delete('/api/mail-logs', async (_req, res) => {
     try {
       if (fs.existsSync(MAIL_LOGS_FILE)) {
         fs.writeFileSync(MAIL_LOGS_FILE, '[]', 'utf-8');
       }
+      await saveFirestoreDocOnServer('email_config', 'mail_logs', {
+        id: 'mail_logs',
+        itemsJson: '[]',
+        updatedAt: new Date().toISOString()
+      });
       return res.json({ ok: true });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message || 'Failed to clear mail logs' });
@@ -962,7 +1122,7 @@ async function startServer() {
       });
     }
 
-    const storedSmtp = readServerSmtpConfig();
+    const { config: storedSmtp } = await readServerSmtpConfigAsync(false);
     const smtpHost = String(body.smtpHost || storedSmtp.smtpHost || 'smtp.gmail.com').trim();
     const smtpPort = String(body.smtpPort || storedSmtp.smtpPort || '465').trim();
     const smtpUser = String(body.smtpUser || storedSmtp.smtpUser || '').trim();

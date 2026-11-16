@@ -782,7 +782,7 @@ export default function MobileB2CHome({
         </div>
 
         {/* Foreground Content Over Background Video (Balanced top-to-bottom iPhone fit) */}
-        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-3.5 pb-4 gap-3">
+        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-4 pb-5 gap-4">
           <div className="space-y-2.5">
             <div>
               <p className="text-[10px] font-bold text-emerald-300 tracking-wide uppercase drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
@@ -857,172 +857,205 @@ export default function MobileB2CHome({
             </div>
           </div>
 
-          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO */}
-          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-0.5">
-            <div className="flex items-center justify-between mb-1.5">
-              <h2 className="text-[10.5px] font-extrabold uppercase tracking-wider text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (BIG MOBILE BOXES) */}
+          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-1">
+            <div className="flex items-baseline justify-between gap-2 mb-3">
+              <h2 className="text-[15px] font-black uppercase tracking-wide text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
                 Explore Travel Services
               </h2>
-              <span className="text-[10px] font-bold text-amber-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+              <span className="text-[11px] font-bold text-amber-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)] shrink-0">
                 Direct Operator Rates
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => onNavigate('/search', { category: 'Packages' })}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-amber-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0">
-                  <Palmtree className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-md">
+                    <Palmtree className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Holiday Packages
                   </h3>
-                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
                     Guided tours &amp; stays
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/hotels')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-emerald-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                  <Building2 className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                    <Building2 className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Hotels &amp; Resorts
                   </h3>
-                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
                     Contracted room rates
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/tickets')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-purple-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
-                  <Ticket className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                    <Ticket className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Attraction Tickets
                   </h3>
-                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
                     Instant gate QR passes
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/flights')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-sky-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0">
-                  <Plane className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                    <Plane className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Flights
                   </h3>
-                  <p className="text-[10px] text-sky-200 truncate mt-0.5">
+                  <p className="text-xs text-sky-200 font-medium leading-snug mt-1">
                     GFK available &amp; status
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/transport')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-blue-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
-                  <Car className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                    <Car className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Private Transfers
                   </h3>
-                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
                     KLIA cabs &amp; chauffeurs
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/restaurants')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-rose-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px]"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
-                  <UtensilsCrossed className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                    <UtensilsCrossed className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Dining &amp; Cruises
                   </h3>
-                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
                     Food trails &amp; yachts
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
+
               <button
                 type="button"
                 onClick={() => onNavigate('/cruises')}
-                className="bg-zinc-950/45 hover:bg-zinc-900/60 backdrop-blur-md border border-white/25 hover:border-teal-400/70 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px] min-w-0"
+                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0">
-                  <Waves className="w-4 h-4 stroke-[2.2]" />
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                    <Waves className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <ChevronRight className="w-4 h-4 text-white/90" />
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xs font-extrabold text-white truncate leading-tight">
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
                     Cruises &amp; Yachts
                   </h3>
-                  <p className="text-[10px] text-zinc-200 truncate mt-0.5">
+                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
                     Langkawi sunset sails
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/marketplaces')}
-                className="bg-emerald-950/75 hover:bg-emerald-900/85 backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl p-2 text-left transition-all cursor-pointer flex items-center gap-2 min-h-[50px] min-w-0"
+                className="bg-emerald-950/80 hover:bg-emerald-900/90 active:scale-[0.98] backdrop-blur-md border border-emerald-400/50 hover:border-amber-400/85 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
               >
-                <div className="w-8 h-8 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0">
-                  <Globe className="w-4 h-4 stroke-[2.2]" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1">
-                    <h3 className="text-xs font-extrabold text-white truncate leading-tight">
-                      Marketplaces
-                    </h3>
-                    <span className="px-1 py-0.5 rounded bg-amber-400 text-zinc-950 text-[8px] font-black uppercase leading-none shrink-0">
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-md">
+                    <Globe className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="px-1.5 py-0.5 rounded bg-amber-400 text-zinc-950 text-[9px] font-black uppercase leading-none">
                       Hot
                     </span>
+                    <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center">
+                      <ChevronRight className="w-4 h-4 text-emerald-200" />
+                    </span>
                   </div>
-                  <p className="text-[10px] text-emerald-200 truncate mt-0.5">
+                </div>
+                <div className="min-w-0 w-full mt-3.5">
+                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                    Marketplaces
+                  </h3>
+                  <p className="text-xs text-emerald-200 font-medium leading-snug mt-1">
                     Viator · GYG · TripAdvisor
                   </p>
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
               </button>
             </div>
           </div>

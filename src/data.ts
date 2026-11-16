@@ -14,7 +14,7 @@ import {
   PackagePoster,
   GlobalSettings
 } from './types';
-import { DEFAULT_EMAIL_HIERARCHY_MAP } from './lib/mailRouting';
+import { DEFAULT_EMAIL_HIERARCHY_MAP, DEFAULT_EMAIL_TEMPLATES } from './lib/mailRouting';
 
 const createBrandSvgDataUri = (
   bgHex: string,
@@ -1505,6 +1505,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   accountsEmail: 'booking@gfkholidays.com',
   flightsEmail: 'flights@gfkholidays.com',
   emailHierarchyRouting: DEFAULT_EMAIL_HIERARCHY_MAP,
+  emailTemplates: DEFAULT_EMAIL_TEMPLATES,
   invoiceMessage: 'Direct Bank Transfers: Payment proof must be emailed to booking@gfkholidays.com within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
   bankAccountName: 'GFK HOLIDAYS SDN BHD',
   bankPartner: 'Maybank (Malayan Banking Berhad)',

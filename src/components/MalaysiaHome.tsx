@@ -877,41 +877,39 @@ export default function MalaysiaHome({
         <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-zinc-200/90">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
             <div>
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-pulse" />
-                <h2 className="text-xl sm:text-2xl font-black text-zinc-950 tracking-tight">
-                  Our Services
-                </h2>
-              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-zinc-950 tracking-tight">
+                Our Services
+              </h2>
               <p className="text-xs sm:text-sm text-zinc-500 font-medium mt-1">
                 Explore Malaysia&apos;s direct local travel services &amp; available flight allotments
               </p>
             </div>
-            <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-3.5 py-1.5 rounded-full self-start sm:self-auto">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 self-start sm:self-auto">
               Direct Local Supplier Rates
             </span>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {/* SERVICE 1: Day Out & Packages */}
             <button
               type="button"
               onClick={() => onNavigate('/search', { category: 'Packages' })}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-amber-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-amber-400/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <Palmtree className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <Palmtree className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-amber-100 text-amber-900 border border-amber-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-amber-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
                   Island &amp; City
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-amber-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-amber-800 transition-colors leading-snug mt-0.5">
                   Day Out &amp; Packages
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Langkawi, Sabah &amp; KL
                 </p>
               </div>
@@ -921,21 +919,22 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/hotels')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <Building2 className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <Building2 className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-emerald-100 text-emerald-900 border border-emerald-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
                   Direct Rates
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-snug mt-0.5">
                   Hotels &amp; Stays
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Resorts &amp; 5-Star Rooms
                 </p>
               </div>
@@ -945,21 +944,22 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/search', { query: 'Dining' })}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-rose-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-rose-400/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <UtensilsCrossed className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <UtensilsCrossed className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-rose-100 text-rose-900 border border-rose-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-rose-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
                   Authentic Taste
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-rose-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-rose-800 transition-colors leading-snug mt-0.5">
                   Restaurants
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Michelin Trails &amp; High-Tea
                 </p>
               </div>
@@ -969,21 +969,22 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/tickets')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-purple-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-purple-400/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <TicketIcon className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <TicketIcon className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-purple-100 text-purple-900 border border-purple-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-purple-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700">
                   Instant QR
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-purple-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-purple-800 transition-colors leading-snug mt-0.5">
                   Sightseeing &amp; Attractions
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Twin Towers &amp; Parks
                 </p>
               </div>
@@ -993,21 +994,22 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/transport')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-blue-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-blue-400/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <Car className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <Car className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-blue-100 text-blue-900 border border-blue-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-blue-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">
                   VIP Fleet
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-blue-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-blue-800 transition-colors leading-snug mt-0.5">
                   Transport Services
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   KLIA Cabs &amp; Chauffeurs
                 </p>
               </div>
@@ -1017,21 +1019,22 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/cruises')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-teal-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-teal-400/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <Waves className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <Waves className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-cyan-100 text-cyan-900 border border-cyan-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-teal-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700">
                   Catamaran
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-teal-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-teal-800 transition-colors leading-snug mt-0.5">
                   Cruises
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Langkawi &amp; Yachts
                 </p>
               </div>
@@ -1041,21 +1044,22 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/flights')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-sky-400/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-sky-400/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <Plane className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <Plane className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-sky-100 text-sky-900 border border-sky-300/80 text-[10px] font-black px-2 py-0.5 rounded-full">
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-sky-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700">
                   GFK Stock
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-sky-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-sky-800 transition-colors leading-snug mt-0.5">
                   Flights
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Live Status &amp; Seats
                 </p>
               </div>
@@ -1065,22 +1069,23 @@ export default function MalaysiaHome({
             <button
               type="button"
               onClick={() => onNavigate('/marketplaces')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-4 text-left shadow-xs hover:shadow-lg transition-all cursor-pointer flex flex-col justify-between h-[136px]"
+              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[168px]"
             >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                  <Globe className="w-5 h-5 stroke-[2.2]" />
+              <div className="flex items-start justify-between w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-150">
+                  <Globe className="w-6 h-6 stroke-[2.2]" />
                 </div>
-                <span className="bg-amber-100 text-amber-900 border border-amber-300/80 text-[10px] font-black px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                  <Flame className="w-2.5 h-2.5 shrink-0" />
+                <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all duration-150" />
+              </div>
+              <div className="mt-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 inline-flex items-center gap-1">
+                  <Flame className="w-3 h-3 shrink-0" />
                   Trending
                 </span>
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-tight">
+                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-snug mt-0.5">
                   Marketplace Booking
                 </h3>
-                <p className="text-[11px] text-zinc-500 font-medium truncate mt-0.5">
+                <p className="text-xs text-zinc-500 font-medium leading-snug mt-1">
                   Viator, TripAdvisor &amp; GYG
                 </p>
               </div>

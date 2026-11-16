@@ -217,6 +217,8 @@
         "accountsEmail": { "type": "string" },
         "bookingEmail": { "type": "string" },
         "flightsEmail": { "type": "string" },
+        "emailHierarchyRouting": { "type": "object" },
+        "emailTemplates": { "type": "object" },
         "bankAccountName": { "type": "string" },
         "bankPartner": { "type": "string" },
         "bankAccountNumber": { "type": "string" },
@@ -234,6 +236,22 @@
         "fxManualRateOverride": { "type": "number" }
       },
       "required": ["id"]
+    },
+    "EmailConfig": {
+      "title": "EmailConfig",
+      "description": "Persistent SMTP mail server configuration stored in Firestore for deployed environments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "smtpHost": { "type": "string" },
+        "smtpPort": { "type": "string" },
+        "smtpUser": { "type": "string" },
+        "smtpPass": { "type": "string" },
+        "fromEmail": { "type": "string" },
+        "fromName": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "smtpHost", "smtpPort"]
     },
     "FlightInquiry": {
       "title": "FlightInquiry",
@@ -295,6 +313,7 @@
     "reviews": { "schema": "Review", "description": "Collection of product reviews" },
     "flight_inquiries": { "schema": "FlightInquiry", "description": "Collection of flight fare quote/code requests and non-banking flight inquiries" },
     "settings": { "schema": "Setting", "description": "Collection of global settings and homepage CMS" },
+    "email_config": { "schema": "EmailConfig", "description": "Persistent SMTP server credentials and sender identity" },
     "cms_snapshots": { "schema": "CmsSnapshot", "description": "Atomic collection snapshot mirrors for instant cross-device sync" },
     "cms_video_chunks": { "schema": "CmsVideoChunk", "description": "Chunked fallback video data for cross-device video playback" }
   }

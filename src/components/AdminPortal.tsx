@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { doc, setDoc } from 'firebase/firestore';
-import { getFirebaseFirestore } from '../lib/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { fetchFirestoreDocRest, getFirebaseFirestore } from '../lib/firebase';
+import { handleFirestoreError, OperationType } from '../hooks/useFirestore';
 import { Package, MapPin, Users, Calendar, Settings, Image as ImageIcon, Plus, Trash2, Shield, Mail, Phone, CreditCard, DollarSign, Clock, CheckCircle, XCircle, Search, Filter, AlertTriangle, FileText, Check, LayoutDashboard, Ticket, Building2, Truck, Box, Package as PackageIcon, Globe, MessageSquare, X, Edit, Crop, Plane, RefreshCw, Flame, ArrowRightLeft, Send, Server } from 'lucide-react';
 import {
   useCurrencyRate,
@@ -14,13 +15,22 @@ import {
 import {
   ALL_MAIL_HIERARCHY_KEYS,
   DEFAULT_EMAIL_HIERARCHY_MAP,
+  DEFAULT_EMAIL_TEMPLATES,
   getMergedEmailHierarchy,
+  getMergedEmailTemplates,
+  renderTransactionalEmail,
   resolveBookingMailDispatch,
   dispatchTransactionalEmail
 } from '../lib/mailRouting';
-import { ServiceHierarchyKey, EmailHierarchyRule } from '../types';
+import {
+  ServiceHierarchyKey,
+  EmailHierarchyRule,
+  TransactionalEmailTemplateConfig,
+  TransactionalEmailTemplateId
+} from '../types';
 import DashboardCharts from './DashboardCharts';
 import HomepageCmsPanel from './HomepageCmsPanel';
+import EmailTemplateEditor from './EmailTemplateEditor';
 
 
 const ImageUploader = ({ value, onChange, label }: { value: string, onChange: (val: string) => void, label: string }) => {
@@ -203,20 +213,28 @@ export default function AdminPortal({
     configured: boolean;
     hasPass: boolean;
     hasResendKey: boolean;
+    persistedInDatabase?: boolean;
     updatedAt?: string;
-  }>({ configured: false, hasPass: false, hasResendKey: false });
+  }>({ configured: false, hasPass: false, hasResendKey: false, persistedInDatabase: false });
   const [accountsEmail, setAccountsEmail] = useState('booking@gfkholidays.com');
   const [bookingEmail, setBookingEmail] = useState('booking@gfkholidays.com');
   const [flightsEmail, setFlightsEmail] = useState('flights@gfkholidays.com');
   const [emailHierarchyRouting, setEmailHierarchyRouting] = useState<Record<ServiceHierarchyKey, EmailHierarchyRule>>(
     () => getMergedEmailHierarchy()
   );
+  const [emailTemplates, setEmailTemplates] = useState<Record<TransactionalEmailTemplateId, TransactionalEmailTemplateConfig>>(
+    () => getMergedEmailTemplates()
+  );
+  const [emailSubTab, setEmailSubTab] = useState<'routing' | 'templates'>('routing');
+  const [savingTemplates, setSavingTemplates] = useState(false);
+  const [sendingTemplatePreview, setSendingTemplatePreview] = useState(false);
   const [mailLogs, setMailLogs] = useState<any[]>([]);
   const [loadingMailLogs, setLoadingMailLogs] = useState(false);
   const [testingMail, setTestingMail] = useState(false);
   const [mailTestRecipient, setMailTestRecipient] = useState('');
   const emailDirtyRef = useRef(false);
   const smtpDirtyRef = useRef(false);
+  const templateDirtyRef = useRef(false);
   const [heroVideoUrl, setHeroVideoUrl] = useState('');
   const [heroBgColor, setHeroBgColor] = useState('');
 
@@ -230,26 +248,79 @@ export default function AdminPortal({
   const [fxManualRateOverride, setFxManualRateOverride] = useState<number>(20.65);
 
   const fetchServerSmtpConfig = async () => {
+    let loadedFromServer = false;
     try {
-      const res = await fetch('/api/smtp-config');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data?.ok) {
-        if (!smtpDirtyRef.current) {
-          if (data.smtpHost) setSmtpHost(data.smtpHost);
-          if (data.smtpPort) setSmtpPort(data.smtpPort);
-          if (data.smtpUser) setSmtpUser(data.smtpUser);
-          if (data.fromName) setSmtpFromName(data.fromName);
+      const res = await fetch('/api/smtp-config', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.ok) {
+          loadedFromServer = true;
+          if (!smtpDirtyRef.current) {
+            if (data.smtpHost) setSmtpHost(data.smtpHost);
+            if (data.smtpPort) setSmtpPort(data.smtpPort);
+            if (data.smtpUser) setSmtpUser(data.smtpUser);
+            if (data.fromName) setSmtpFromName(data.fromName);
+          }
+          setSmtpConfiguredStatus({
+            configured: Boolean(data.configured),
+            hasPass: Boolean(data.hasPass),
+            hasResendKey: Boolean(data.hasResendKey),
+            persistedInDatabase: Boolean(data.persistedInDatabase),
+            updatedAt: data.updatedAt
+          });
+          if (data.persistedInDatabase && data.smtpUser && data.hasPass) {
+            return;
+          }
         }
-        setSmtpConfiguredStatus({
-          configured: Boolean(data.configured),
-          hasPass: Boolean(data.hasPass),
-          hasResendKey: Boolean(data.hasResendKey),
-          updatedAt: data.updatedAt
-        });
       }
     } catch {
-      // Ignore network hiccup on initial load
+      // Static deploy or transient server hiccup — fall through to direct Firestore read
+    }
+
+    // Fallback / Hydrate directly from Firestore `email_config/smtp`
+    try {
+      const db = getFirebaseFirestore();
+      let dbData: any = null;
+      try {
+        const snap = await getDoc(doc(db, 'email_config', 'smtp'));
+        if (snap.exists()) dbData = snap.data();
+      } catch (err) {
+        handleFirestoreError(err, OperationType.GET, 'email_config/smtp');
+      }
+      if (!dbData) {
+        const restDoc = await fetchFirestoreDocRest('email_config', 'smtp');
+        const f = restDoc?.fields;
+        if (f) {
+          dbData = {
+            smtpHost: f.smtpHost?.stringValue || '',
+            smtpPort: f.smtpPort?.stringValue || '',
+            smtpUser: f.smtpUser?.stringValue || '',
+            smtpPass: f.smtpPass?.stringValue || '',
+            fromName: f.fromName?.stringValue || '',
+            updatedAt: f.updatedAt?.stringValue || ''
+          };
+        }
+      }
+      if (dbData && (dbData.smtpUser || dbData.smtpHost)) {
+        if (!smtpDirtyRef.current) {
+          if (dbData.smtpHost) setSmtpHost(dbData.smtpHost);
+          if (dbData.smtpPort) setSmtpPort(dbData.smtpPort);
+          if (dbData.smtpUser) setSmtpUser(dbData.smtpUser);
+          if (dbData.fromName) setSmtpFromName(dbData.fromName);
+        }
+        const hasCreds = Boolean(dbData.smtpUser && dbData.smtpPass);
+        setSmtpConfiguredStatus((prev) => ({
+          ...prev,
+          configured: prev.configured || hasCreds,
+          hasPass: prev.hasPass || Boolean(dbData.smtpPass),
+          persistedInDatabase: true,
+          updatedAt: dbData.updatedAt || prev.updatedAt
+        }));
+      } else if (!loadedFromServer) {
+        setSmtpConfiguredStatus((prev) => ({ ...prev, persistedInDatabase: false }));
+      }
+    } catch {
+      // Ignore offline read
     }
   };
 
@@ -303,6 +374,9 @@ export default function AdminPortal({
         if (globalSettings.accountsEmail !== undefined) setAccountsEmail(globalSettings.accountsEmail || 'booking@gfkholidays.com');
         if (globalSettings.flightsEmail !== undefined) setFlightsEmail(globalSettings.flightsEmail || 'flights@gfkholidays.com');
         setEmailHierarchyRouting(getMergedEmailHierarchy(globalSettings));
+      }
+      if (!templateDirtyRef.current) {
+        setEmailTemplates(getMergedEmailTemplates(globalSettings));
       }
       if (globalSettings.fxMarkupInr !== undefined) setFxMarkupInr(Number(globalSettings.fxMarkupInr));
       if (globalSettings.fxMarkupPercent !== undefined) setFxMarkupPercent(Number(globalSettings.fxMarkupPercent));
@@ -375,6 +449,56 @@ export default function AdminPortal({
         (addr) => addr && addr.trim().toLowerCase() !== customerEmailLower
       );
 
+      const resolvedLogo = (invoiceLogoUrl || logoUrl || '/gfk-custom-logo.webp').startsWith('/')
+        ? `${window.location.origin}${invoiceLogoUrl || logoUrl || '/gfk-custom-logo.webp'}`
+        : (invoiceLogoUrl || logoUrl);
+
+      const bankDetailsBlock = `
+        <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 20px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <thead>
+              <tr style="background-color: #f4f4f5; color: #71717a;">
+                <th style="padding: 12px 15px; text-align: left; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Description</th>
+                <th style="padding: 12px 15px; text-align: right; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding: 12px 15px; border-bottom: 1px solid #e4e4e7;">
+                  <div style="font-weight: 700; color: #18181b;">${title}</div>
+                  <div style="font-size: 11px; color: #a1a1aa; margin-top: 4px;">Date: ${booking.date || ''} &nbsp;|&nbsp; Slot: ${booking.timeSlot || 'Standard Admission'}</div>
+                </td>
+                <td style="padding: 12px 15px; text-align: right; font-weight: 700; color: #18181b; border-bottom: 1px solid #e4e4e7;">RM ${checkoutTotal.toLocaleString()}</td>
+              </tr>
+              <tr style="background-color: #f4f4f5;">
+                <td style="padding: 12px 15px; text-align: right; font-weight: 700; color: #71717a;">Outstanding Balance Due</td>
+                <td style="padding: 12px 15px; text-align: right; font-weight: 800; color: #4338ca; font-size: 14px;">RM ${checkoutTotal.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>`;
+
+      const renderedConfirmMail = renderTransactionalEmail(
+        'invoice_dispatch',
+        {
+          client: booking.client || booking.customerName || 'Customer',
+          bookingId: booking.id,
+          title,
+          serviceTier: dispatch.rule.label,
+          date: booking.date || '',
+          timeSlot: booking.timeSlot || 'Standard Admission',
+          total: `RM ${checkoutTotal.toLocaleString()}`,
+          assignedDeskEmail: dispatch.primaryRecipient,
+          billingEmail: dispatch.billingEmail,
+          policyNote:
+            globalSettings?.invoiceMessage ||
+            'Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
+          logo: resolvedLogo,
+          bankDetailsHtml: bankDetailsBlock
+        },
+        { ...globalSettings, emailTemplates }
+      );
+
       const res = await dispatchTransactionalEmail(
         {
           to: booking.email,
@@ -389,54 +513,8 @@ export default function AdminPortal({
           smtpPort: smtpPort || smtpData.smtpPort || undefined,
           smtpUser: smtpUser || smtpData.smtpUser || undefined,
           smtpPass: smtpPass || smtpData.smtpPass || undefined,
-          subject: `Invoice & Confirmation: ${title} [${booking.id}]`,
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 40px auto; color: #3f3f46; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; background: #ffffff;">
-              <div style="padding: 30px;">
-                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 25px;">
-                  <img src="${window.location.origin}/android-chrome-512x512.png" alt="GFK Logo" style="height: 44px; width: 44px; object-fit: contain;" />
-                  <div>
-                    <h1 style="font-size: 24px; font-weight: 800; color: #18181b; margin: 0;">GFK Holidays Malaysia</h1>
-                    <p style="font-size: 10px; font-weight: 700; color: #047857; text-transform: uppercase; margin: 4px 0 0 0; letter-spacing: 0.5px;">${dispatch.rule.label} · Booking Confirmed</p>
-                  </div>
-                </div>
-                <div style="background-color: #f4f4f5; padding: 20px; border-radius: 8px; margin-bottom: 30px; border-left: 4px solid #047857;">
-                  <p style="margin: 0; font-size: 14px; font-weight: 700; color: #18181b;">Booking ID: ${booking.id}</p>
-                  <p style="margin: 5px 0 0 0; font-size: 13px; color: #52525b;">Client: ${booking.client || booking.customerName}</p>
-                  <p style="margin: 5px 0 0 0; font-size: 12px; color: #52525b;">Assigned Desk: ${dispatch.primaryRecipient}</p>
-                </div>
-                <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 25px;">
-                  <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-                    <thead>
-                      <tr style="background-color: #f4f4f5; color: #71717a;">
-                        <th style="padding: 15px; text-align: left; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Description</th>
-                        <th style="padding: 15px; text-align: right; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td style="padding: 15px; border-bottom: 1px solid #e4e4e7;">
-                          <div style="font-weight: 700; color: #18181b;">${title}</div>
-                          <div style="font-size: 11px; color: #a1a1aa; margin-top: 5px;">Date: ${booking.date || ''} &nbsp;|&nbsp; Slot: ${booking.timeSlot || 'Standard Admission'}</div>
-                        </td>
-                        <td style="padding: 15px; text-align: right; font-weight: 700; color: #18181b; border-bottom: 1px solid #e4e4e7;">RM ${checkoutTotal.toLocaleString()}</td>
-                      </tr>
-                      <tr style="background-color: #f4f4f5;">
-                        <td style="padding: 15px; text-align: right; font-weight: 700; color: #71717a;">Outstanding Balance Due</td>
-                        <td style="padding: 15px; text-align: right; font-weight: 800; color: #4338ca; font-size: 14px;">RM ${checkoutTotal.toLocaleString()}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <p style="font-size: 11px; color: #52525b; margin: 0 0 10px 0; line-height: 1.5;">
-                  Questions or updates? Reply directly to this email or contact <strong style="color: #3f3f46;">${dispatch.primaryRecipient}</strong> mentioning reference <strong style="color: #18181b;">#${booking.id}</strong>.
-                </p>
-                <p style="font-size: 11px; color: #be123c; background-color: #fff1f2; border: 1px solid #ffe4e6; padding: 10px; border-radius: 6px; font-weight: 700; margin: 0 0 15px 0;">
-                  ⚠️ IMPORTANT: ${globalSettings?.invoiceMessage || 'Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
-                </p>
-              </div>
-            </div>
-          `
+          subject: renderedConfirmMail.subject,
+          html: renderedConfirmMail.html
         },
         token
       );
@@ -476,6 +554,29 @@ export default function AdminPortal({
         emailHierarchyRouting
       });
 
+      const resolvedLogo = (invoiceLogoUrl || logoUrl || '/gfk-custom-logo.webp').startsWith('/')
+        ? `${window.location.origin}${invoiceLogoUrl || logoUrl || '/gfk-custom-logo.webp'}`
+        : (invoiceLogoUrl || logoUrl);
+
+      const renderedRejectMail = renderTransactionalEmail(
+        'booking_cancelled',
+        {
+          client: booking.client || booking.customerName || 'Customer',
+          bookingId: booking.id,
+          title,
+          serviceTier: dispatch.rule.label,
+          date: booking.date || '',
+          timeSlot: booking.timeSlot || 'Standard Admission',
+          total: `RM ${(booking.total || 0).toLocaleString()}`,
+          assignedDeskEmail: dispatch.primaryRecipient,
+          billingEmail: dispatch.billingEmail,
+          policyNote: `Contact ${dispatch.primaryRecipient} referencing #${booking.id} for alternatives.`,
+          logo: resolvedLogo,
+          bankDetailsHtml: ''
+        },
+        { ...globalSettings, emailTemplates }
+      );
+
       const res = await dispatchTransactionalEmail(
         {
           to: booking.email,
@@ -490,16 +591,8 @@ export default function AdminPortal({
           smtpPort: smtpPort || smtpData.smtpPort || undefined,
           smtpUser: smtpUser || smtpData.smtpUser || undefined,
           smtpPass: smtpPass || smtpData.smtpPass || undefined,
-          subject: `Booking Cancelled: ${title} [${booking.id}]`,
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; background: #ffffff;">
-              <div style="padding: 30px;">
-                <h1 style="font-size: 20px; font-weight: 800; color: #ef4444; margin: 0 0 15px 0;">Booking Cancelled</h1>
-                <p style="font-size: 14px; color: #3f3f46; line-height: 1.5;">We regret to inform you that your ${dispatch.rule.label} booking request <strong>#${booking.id}</strong> could not be fulfilled at this time.</p>
-                <p style="font-size: 14px; color: #3f3f46; line-height: 1.5;">If you have any questions, please contact our ${dispatch.rule.label} desk at <strong>${dispatch.primaryRecipient}</strong>.</p>
-              </div>
-            </div>
-          `
+          subject: renderedRejectMail.subject,
+          html: renderedRejectMail.html
         },
         token
       );
@@ -582,12 +675,19 @@ export default function AdminPortal({
   const handleSaveSmtp = async () => {
     const effectiveHost = (smtpHost || 'smtp.gmail.com').trim();
     const effectivePort = (smtpPort || '465').trim();
+    const effectiveUser = (smtpUser || '').trim();
+    const effectivePass = (smtpPass || '').trim();
     const effectiveBooking = (bookingEmail || 'booking@gfkholidays.com').trim();
     const effectiveAccounts = (accountsEmail || 'booking@gfkholidays.com').trim();
     const effectiveFlights = (flightsEmail || 'flights@gfkholidays.com').trim();
+    const effectiveFromEmail = effectiveAccounts || effectiveBooking || effectiveUser;
+    const effectiveFromName = (smtpFromName || 'GFK Holidays Malaysia').trim();
 
     let serverSavedOk = false;
+    let firestoreSmtpSavedOk = false;
     let serverErrorMsg = '';
+
+    // 1. Save to Express backend (/api/smtp-config) which also persists to Firestore REST API
     try {
       const res = await fetch('/api/smtp-config', {
         method: 'POST',
@@ -595,29 +695,59 @@ export default function AdminPortal({
         body: JSON.stringify({
           smtpHost: effectiveHost,
           smtpPort: effectivePort,
-          smtpUser: (smtpUser || '').trim(),
-          smtpPass: (smtpPass || '').trim(),
-          fromEmail: effectiveAccounts || effectiveBooking || (smtpUser || '').trim(),
-          fromName: (smtpFromName || 'GFK Holidays Malaysia').trim()
+          smtpUser: effectiveUser,
+          smtpPass: effectivePass,
+          fromEmail: effectiveFromEmail,
+          fromName: effectiveFromName
         })
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.ok) {
         serverSavedOk = true;
+        firestoreSmtpSavedOk = Boolean(data.persistedInDatabase);
         setSmtpConfiguredStatus({
           configured: Boolean(data.configured),
           hasPass: Boolean(data.hasPass),
           hasResendKey: smtpConfiguredStatus.hasResendKey,
+          persistedInDatabase: Boolean(data.persistedInDatabase),
           updatedAt: data.updatedAt
         });
       } else {
-        serverErrorMsg = data?.error || 'Could not persist SMTP config on server';
+        serverErrorMsg = data?.error || `HTTP ${res.status}`;
       }
     } catch (err: any) {
-      serverErrorMsg = err?.message || 'Network error saving SMTP config';
+      serverErrorMsg = err?.message || 'Backend API unreachable';
     }
 
-    // Persist non-secret routing hierarchy and desk addresses into GlobalSettings & emailSettings atomically
+    // 2. Always persist directly to Firebase Firestore (`email_config/smtp`) so deployed environments record keys permanently
+    try {
+      const db = getFirebaseFirestore();
+      const smtpFirestorePayload: Record<string, any> = {
+        id: 'smtp',
+        smtpHost: effectiveHost,
+        smtpPort: effectivePort,
+        smtpUser: effectiveUser,
+        fromEmail: effectiveFromEmail,
+        fromName: effectiveFromName,
+        updatedAt: new Date().toISOString()
+      };
+      if (effectivePass) {
+        smtpFirestorePayload.smtpPass = effectivePass;
+      }
+      await setDoc(doc(db, 'email_config', 'smtp'), smtpFirestorePayload, { merge: true });
+      firestoreSmtpSavedOk = true;
+      setSmtpConfiguredStatus((prev) => ({
+        ...prev,
+        configured: Boolean((effectiveUser && (effectivePass || prev.hasPass)) || prev.hasResendKey),
+        hasPass: Boolean(effectivePass || prev.hasPass),
+        persistedInDatabase: true,
+        updatedAt: smtpFirestorePayload.updatedAt
+      }));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'email_config/smtp');
+    }
+
+    // 3. Persist routing hierarchy, desk emails, and custom transactional email templates into GlobalSettings (`settings/global`)
     const baseCollection = Array.isArray(settings)
       ? [...settings]
       : Array.isArray(emailSettings)
@@ -632,7 +762,8 @@ export default function AdminPortal({
       bookingEmail: effectiveBooking,
       flightsEmail: effectiveFlights,
       voucherDisplayMode: voucherDisplayMode || 'payment_only',
-      emailHierarchyRouting
+      emailHierarchyRouting,
+      emailTemplates
     };
     if (gIdx >= 0) baseCollection[gIdx] = updatedGlobal;
     else baseCollection.push(updatedGlobal);
@@ -648,8 +779,8 @@ export default function AdminPortal({
         ...(smtpIdx >= 0 ? newEmailSettings[smtpIdx] : { id: 'smtp' }),
         smtpHost: effectiveHost,
         smtpPort: effectivePort,
-        smtpUser: (smtpUser || '').trim(),
-        fromName: (smtpFromName || 'GFK Holidays Malaysia').trim(),
+        smtpUser: effectiveUser,
+        fromName: effectiveFromName,
         accountsEmail: effectiveAccounts,
         bookingEmail: effectiveBooking,
         flightsEmail: effectiveFlights
@@ -661,7 +792,8 @@ export default function AdminPortal({
           accountsEmail: effectiveAccounts,
           bookingEmail: effectiveBooking,
           flightsEmail: effectiveFlights,
-          emailHierarchyRouting
+          emailHierarchyRouting,
+          emailTemplates
         };
       }
       if (smtpIdx >= 0) newEmailSettings[smtpIdx] = updatedSmtp;
@@ -671,14 +803,109 @@ export default function AdminPortal({
 
     emailDirtyRef.current = false;
     smtpDirtyRef.current = false;
+    templateDirtyRef.current = false;
     setBookingEmail(effectiveBooking);
     setAccountsEmail(effectiveAccounts);
     setFlightsEmail(effectiveFlights);
 
-    if (serverSavedOk) {
-      showToast('Service Hierarchy, Mail Movement & Server SMTP Credentials Saved!');
+    if (firestoreSmtpSavedOk && serverSavedOk) {
+      showToast('SMTP Keys Recorded in Firebase Firestore DB & Mail Server!');
+    } else if (firestoreSmtpSavedOk) {
+      showToast('SMTP Keys & Templates Saved Directly to Firebase Firestore Database!');
+    } else if (serverSavedOk) {
+      showToast('Hierarchy & Server SMTP Saved (Local Mail Server).');
     } else {
       showToast(`Hierarchy saved, SMTP warning: ${serverErrorMsg}`);
+    }
+  };
+
+  const handleChangeEmailTemplate = (
+    id: TransactionalEmailTemplateId,
+    patch: Partial<TransactionalEmailTemplateConfig>
+  ) => {
+    templateDirtyRef.current = true;
+    setEmailTemplates((prev) => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || DEFAULT_EMAIL_TEMPLATES[id]),
+        ...patch
+      }
+    }));
+  };
+
+  const handleResetEmailTemplate = (id: TransactionalEmailTemplateId) => {
+    templateDirtyRef.current = true;
+    setEmailTemplates((prev) => ({
+      ...prev,
+      [id]: { ...DEFAULT_EMAIL_TEMPLATES[id] }
+    }));
+    showToast(`Reset "${DEFAULT_EMAIL_TEMPLATES[id].name}" to default layout (Save to apply)`);
+  };
+
+  const handleSaveEmailTemplates = async () => {
+    setSavingTemplates(true);
+    try {
+      const baseCollection = Array.isArray(settings) ? [...settings] : [];
+      const gIdx = baseCollection.findIndex((s: any) => s.id === 'global');
+      const existingGlobal = gIdx >= 0 ? baseCollection[gIdx] : { id: 'global' };
+      const updatedGlobal = {
+        ...existingGlobal,
+        id: 'global',
+        emailTemplates
+      };
+      if (gIdx >= 0) baseCollection[gIdx] = updatedGlobal;
+      else baseCollection.push(updatedGlobal);
+
+      if (onUpdateSettings) {
+        await onUpdateSettings(baseCollection);
+      } else {
+        const db = getFirebaseFirestore();
+        await setDoc(doc(db, 'settings', 'global'), JSON.parse(JSON.stringify(updatedGlobal)), { merge: true });
+      }
+      templateDirtyRef.current = false;
+      showToast('Transactional Email Templates Saved & Active Live!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'settings/global');
+      showToast('Unable to save email templates to database');
+    } finally {
+      setSavingTemplates(false);
+    }
+  };
+
+  const handleSendTemplatePreview = async (
+    subject: string,
+    html: string,
+    templateId: TransactionalEmailTemplateId
+  ) => {
+    const recipient = (mailTestRecipient || accountsEmail || bookingEmail || smtpUser || '').trim();
+    if (!recipient) {
+      showToast('Enter a Test Recipient email in Routing & SMTP tab first.');
+      return;
+    }
+    setSendingTemplatePreview(true);
+    try {
+      const res = await dispatchTransactionalEmail({
+        to: recipient,
+        subject: `[TEMPLATE PREVIEW] ${subject}`,
+        html,
+        categoryKey: templateId,
+        categoryLabel: `Template Preview (${DEFAULT_EMAIL_TEMPLATES[templateId].name})`,
+        smtpHost: smtpHost || undefined,
+        smtpPort: smtpPort || undefined,
+        smtpUser: smtpUser || undefined,
+        smtpPass: smtpPass || undefined,
+        fromEmail: accountsEmail || bookingEmail || smtpUser || undefined,
+        fromName: smtpFromName || 'GFK Holidays Malaysia',
+        replyTo: accountsEmail || bookingEmail || undefined
+      });
+      await fetchMailLogs();
+      if (res.ok) {
+        showToast(`Template preview delivered to ${recipient}`);
+      } else {
+        showToast(`Preview delivery failed: ${res.error || 'Check SMTP credentials'}`);
+      }
+    } finally {
+      setSendingTemplatePreview(false);
     }
   };
 
@@ -918,9 +1145,10 @@ export default function AdminPortal({
     ).join('');
 
     let emailHtml = '';
+    let emailSubject = `Invoice #${viewInvoiceBooking.id} - ${title}`;
 
-    const resolvedEmailLogo = (invoiceLogoUrl || logoUrl || '/android-chrome-512x512.png').startsWith('/')
-      ? `${window.location.origin}${invoiceLogoUrl || logoUrl || '/android-chrome-512x512.png'}`
+    const resolvedEmailLogo = (invoiceLogoUrl || logoUrl || '/gfk-custom-logo.webp').startsWith('/')
+      ? `${window.location.origin}${invoiceLogoUrl || logoUrl || '/gfk-custom-logo.webp'}`
       : (invoiceLogoUrl || logoUrl);
 
     if (invoiceTemplate === 'custom' && customInvoiceHtml) {
@@ -932,72 +1160,78 @@ export default function AdminPortal({
         .replace(/{{total}}/g, invoiceTotal ? invoiceTotal.toLocaleString() : '0')
         .replace(/{{logo}}/g, resolvedEmailLogo);
     } else {
-      const logoHtml = `<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
-        <img src="${resolvedEmailLogo}" style="max-height: 44px; width: auto;" alt="GFK Holidays Logo" />
-        <h1 style="font-size: ${invoiceTemplate === 'classic' ? '20px' : '24px'}; font-weight: ${invoiceTemplate === 'classic' ? 'normal' : '800'}; color: #18181b; margin: 0;">GFK Holidays Malaysia</h1>
-      </div>`;
-
-      emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 40px auto; color: #3f3f46; border: 1px solid #e4e4e7; border-radius: ${invoiceTemplate === 'classic' ? '0px' : '12px'}; overflow: hidden; background: #ffffff;">
-          <div style="padding: 30px;">
-            <div style="margin-bottom: 30px;">
-              ${logoHtml}
-            </div>
-            <p style="font-size: 14px; color: #18181b;">Dear ${client},</p>
-            <p style="font-size: 14px; color: #52525b; line-height: 1.6;">Please find your official <strong>${dispatch.rule.label}</strong> invoice for voucher ID <strong style="color: #18181b;">#${viewInvoiceBooking.id}</strong> (Assigned Desk: ${dispatch.primaryRecipient}).</p>
-            <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 25px;">
-              <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-                <thead>
-                  <tr style="background-color: #f4f4f5; color: #71717a;">
-                    <th style="padding: 15px; text-align: left; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Service item description</th>
-                    <th style="padding: 15px; text-align: center; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Unit Price</th>
-                    <th style="padding: 15px; text-align: center; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Qty</th>
-                    <th style="padding: 15px; text-align: right; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Subtotal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${itemsHtml}
-                  <tr style="background-color: #f4f4f5;">
-                    <td colspan="3" style="padding: 15px; text-align: right; font-weight: 700; color: #71717a;">Total Due</td>
-                    <td style="padding: 15px; text-align: right; font-weight: 800; color: #4338ca; font-size: 14px;">RM ${invoiceTotal ? invoiceTotal.toLocaleString() : '0'}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div style="background-color: ${invoiceTemplate === 'classic' ? '#ffffff' : '#eef2ff'}; border: 1px solid #e0e7ff; padding: ${invoiceTemplate === 'classic' ? '15px' : '25px'}; border-radius: ${invoiceTemplate === 'classic' ? '0px' : '12px'}; margin-bottom: 25px;">
-              <div style="display: flex; align-items: center; gap: 8px; color: #312e81; font-weight: 700; font-size: 13px; margin-bottom: 15px;">
-                <span>🏦</span> Malaysia Bank Transfer Payment Account Instructions
-              </div>
-              <p style="font-size: 12px; color: #1e1b4b; margin: 0 0 15px 0;">
-                Please initiate a bank transfer for the invoice amount of <strong style="color: #312e81;">RM ${invoiceTotal ? invoiceTotal.toLocaleString() : '0'}</strong> to our authorized corporate account:
-              </p>
-              <div style="background-color: #ffffff; padding: 15px; border-radius: 8px; border: 1px solid #e0e7ff; margin-bottom: 15px;">
-                <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-                  <tr>
-                    <td style="padding-bottom: 10px;">
-                      <span style="color: #a1a1aa; font-weight: 700; display: block; font-size: 11px;">Account Name</span>
-                      <span style="color: #18181b; font-weight: 700;">${bankAccountName || 'GFK HOLIDAYS SDN BHD'}</span>
-                    </td>
-                    <td style="padding-bottom: 10px;">
-                      <span style="color: #a1a1aa; font-weight: 700; display: block; font-size: 11px;">Bank Partner</span>
-                      <span style="color: #18181b; font-weight: 700;">${bankPartner || 'Maybank'}</span>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colspan="2">
-                      <span style="color: #a1a1aa; font-weight: 700; display: block; font-size: 11px;">Account Number</span>
-                      <span style="color: #4338ca; font-weight: 700; font-family: monospace; font-size: 16px; letter-spacing: 2px;">${bankAccountNumber || '5141 2345 6789'}</span>
-                    </td>
-                  </tr>
-                </table>
-              </div>
-              <p style="font-size: 11px; color: #be123c; background-color: #fff1f2; border: 1px solid #ffe4e6; padding: 10px; border-radius: 6px; font-weight: 700; margin: 0 0 15px 0;">
-                ${viewInvoiceBooking.invoiceMessage || invoiceMessage || 'Direct Bank Transfers: Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.'}
-              </p>
-            </div>
-          </div>
+      const bankAndItemsHtml = `
+        <div style="border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; margin-bottom: 20px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <thead>
+              <tr style="background-color: #f4f4f5; color: #71717a;">
+                <th style="padding: 12px 15px; text-align: left; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Service item description</th>
+                <th style="padding: 12px 15px; text-align: center; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Unit Price</th>
+                <th style="padding: 12px 15px; text-align: center; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Qty</th>
+                <th style="padding: 12px 15px; text-align: right; font-weight: 700; border-bottom: 1px solid #e4e4e7;">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+              <tr style="background-color: #f4f4f5;">
+                <td colspan="3" style="padding: 12px 15px; text-align: right; font-weight: 700; color: #71717a;">Total Due</td>
+                <td style="padding: 12px 15px; text-align: right; font-weight: 800; color: #4338ca; font-size: 14px;">RM ${invoiceTotal ? invoiceTotal.toLocaleString() : '0'}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-      `;
+        <div style="background-color: ${invoiceTemplate === 'classic' ? '#ffffff' : '#eef2ff'}; border: 1px solid #e0e7ff; padding: 18px; border-radius: ${invoiceTemplate === 'classic' ? '0px' : '12px'}; margin-bottom: 16px;">
+          <div style="color: #312e81; font-weight: 700; font-size: 13px; margin-bottom: 10px;">
+            Malaysia Bank Transfer Payment Account Instructions
+          </div>
+          <p style="font-size: 12px; color: #1e1b4b; margin: 0 0 12px 0;">
+            Please initiate a bank transfer for <strong style="color: #312e81;">RM ${invoiceTotal ? invoiceTotal.toLocaleString() : '0'}</strong> to our corporate account:
+          </p>
+          <div style="background-color: #ffffff; padding: 12px; border-radius: 8px; border: 1px solid #e0e7ff;">
+            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+              <tr>
+                <td style="padding-bottom: 8px;">
+                  <span style="color: #a1a1aa; font-weight: 700; display: block; font-size: 11px;">Account Name</span>
+                  <span style="color: #18181b; font-weight: 700;">${bankAccountName || 'GFK HOLIDAYS SDN BHD'}</span>
+                </td>
+                <td style="padding-bottom: 8px;">
+                  <span style="color: #a1a1aa; font-weight: 700; display: block; font-size: 11px;">Bank Partner</span>
+                  <span style="color: #18181b; font-weight: 700;">${bankPartner || 'Maybank'}</span>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="2">
+                  <span style="color: #a1a1aa; font-weight: 700; display: block; font-size: 11px;">Account Number</span>
+                  <span style="color: #4338ca; font-weight: 700; font-family: monospace; font-size: 16px; letter-spacing: 2px;">${bankAccountNumber || '5141 2345 6789'}</span>
+                </td>
+              </tr>
+            </table>
+          </div>
+        </div>`;
+
+      const renderedInvoice = renderTransactionalEmail(
+        'invoice_dispatch',
+        {
+          client,
+          bookingId: viewInvoiceBooking.id,
+          title,
+          serviceTier: dispatch.rule.label,
+          date: viewInvoiceBooking.date || '',
+          timeSlot: viewInvoiceBooking.timeSlot || 'Standard Admission',
+          total: `RM ${invoiceTotal ? invoiceTotal.toLocaleString() : '0'}`,
+          assignedDeskEmail: dispatch.primaryRecipient,
+          billingEmail: dispatch.billingEmail,
+          policyNote:
+            viewInvoiceBooking.invoiceMessage ||
+            invoiceMessage ||
+            'Direct Bank Transfers: Payment proof must be emailed within 2 hours of this invoice, otherwise no tickets, packages, or services will be issued under any circumstances.',
+          logo: resolvedEmailLogo,
+          bankDetailsHtml: bankAndItemsHtml
+        },
+        { ...globalSettings, emailTemplates }
+      );
+      emailSubject = renderedInvoice.subject;
+      emailHtml = renderedInvoice.html;
     }
 
     const markInvoiceSent = async () => {
@@ -1022,7 +1256,7 @@ export default function AdminPortal({
       {
         to: viewInvoiceBooking.email,
         cc: ccDeskList,
-        subject: `Invoice #${viewInvoiceBooking.id} - ${title}`,
+        subject: emailSubject,
         html: emailHtml,
         categoryKey: dispatch.categoryKey,
         categoryLabel: dispatch.rule.label,
@@ -1600,34 +1834,36 @@ export default function AdminPortal({
         </div>
       )}
 
-      {/* --- EMAIL ROUTING & HIERARCHY MOVEMENT TAB --- */}
+      {/* --- EMAIL ROUTING, SMTP & VISUAL TEMPLATE EDITOR TAB --- */}
       {activeTab === 'emails' && (
         <div className="space-y-6 animate-fade-in max-w-6xl">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white px-6 py-5 rounded-3xl border border-zinc-200 shadow-xs">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white px-6 py-5 rounded-3xl border border-zinc-200 shadow-xs">
             <div>
               <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-emerald-700">
                 <Mail className="w-4 h-4" />
-                <span>Service Hierarchy &amp; Transactional Mail Engine</span>
+                <span>Service Hierarchy, SMTP Database &amp; Visual Email Studio</span>
               </div>
               <h2 className="text-xl font-black text-zinc-950 mt-1">
-                Mail Movement Hierarchy &amp; SMTP Server Configuration
+                Mail Movement Hierarchy, Persistent SMTP &amp; Template Editor
               </h2>
               <p className="text-xs font-medium text-zinc-500 mt-0.5">
-                Control exactly which department inbox receives confirmations, inquiries, and Stripe receipts across our 5 core service verticals, plus test live SMTP dispatch.
+                Configure 5-tier desk routing, record SMTP credentials directly into Firebase Firestore DB, and design transactional HTML email templates with live preview.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <span
                 className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold border ${
-                  smtpConfiguredStatus.configured
+                  smtpConfiguredStatus.persistedInDatabase
                     ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                    : smtpConfiguredStatus.hasResendKey
+                    : smtpConfiguredStatus.configured
                     ? 'bg-sky-50 text-sky-800 border-sky-200'
                     : 'bg-amber-50 text-amber-900 border-amber-200'
                 }`}
               >
-                {smtpConfiguredStatus.configured
-                  ? 'SMTP Verified & Ready'
+                {smtpConfiguredStatus.persistedInDatabase
+                  ? 'SMTP Recorded in Firestore DB'
+                  : smtpConfiguredStatus.configured
+                  ? 'SMTP Active (Save to Sync DB)'
                   : smtpConfiguredStatus.hasResendKey
                   ? 'Resend API Active'
                   : 'SMTP Not Configured'}
@@ -1638,11 +1874,57 @@ export default function AdminPortal({
                 className="bg-zinc-950 text-white px-5 py-2.5 rounded-xl font-black shadow-md flex items-center hover:bg-emerald-700 text-xs cursor-pointer transition-colors"
               >
                 <Check className="w-4 h-4 mr-1.5" />
-                Save Hierarchy &amp; SMTP
+                Save Routing, SMTP &amp; Templates
               </button>
             </div>
           </div>
 
+          {/* Emails Section Sub-Tabs */}
+          <div className="inline-flex bg-white border border-zinc-200 p-1.5 rounded-2xl shadow-2xs gap-1">
+            <button
+              type="button"
+              onClick={() => setEmailSubTab('routing')}
+              className={`px-4 py-2 rounded-xl text-xs font-black cursor-pointer transition-colors ${
+                emailSubTab === 'routing'
+                  ? 'bg-zinc-950 text-white shadow-xs'
+                  : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
+              }`}
+            >
+              Hierarchy Routing, SMTP Credentials &amp; Audit Logs
+            </button>
+            <button
+              type="button"
+              onClick={() => setEmailSubTab('templates')}
+              className={`px-4 py-2 rounded-xl text-xs font-black cursor-pointer transition-colors ${
+                emailSubTab === 'templates'
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
+              }`}
+            >
+              Visual Email Template Editor &amp; Live Preview
+            </button>
+          </div>
+
+          {emailSubTab === 'templates' && (
+            <EmailTemplateEditor
+              templates={emailTemplates}
+              onChangeTemplate={handleChangeEmailTemplate}
+              onResetTemplate={handleResetEmailTemplate}
+              onSaveTemplates={handleSaveEmailTemplates}
+              onSendPreviewEmail={handleSendTemplatePreview}
+              logoUrl={invoiceLogoUrl || logoUrl}
+              senderName={smtpFromName}
+              senderEmail={smtpUser}
+              bookingEmail={bookingEmail}
+              flightsEmail={flightsEmail}
+              invoiceMessage={invoiceMessage}
+              saving={savingTemplates}
+              sendingPreview={sendingTemplatePreview}
+            />
+          )}
+
+          {emailSubTab === 'routing' && (
+            <>
           {/* 1. Service Hierarchy & Mail Movement Manager */}
           <div className="bg-white rounded-3xl border border-zinc-200 p-6 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
@@ -1781,14 +2063,16 @@ export default function AdminPortal({
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* 2. SMTP Credentials & Sender Verification */}
             <div className="lg:col-span-6 bg-white rounded-3xl border border-zinc-200 p-6 shadow-xs space-y-5">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h3 className="text-base font-black text-zinc-950 flex items-center gap-2">
                   <Server className="w-4 h-4 text-emerald-700" />
                   <span>SMTP Server &amp; Sender Identity</span>
                 </h3>
                 {smtpConfiguredStatus.hasPass && !smtpPass && (
                   <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-                    Password Stored Securely on Server
+                    {smtpConfiguredStatus.persistedInDatabase
+                      ? 'Password Recorded in Firestore DB'
+                      : 'Password Stored on Server'}
                   </span>
                 )}
               </div>
@@ -1848,10 +2132,10 @@ export default function AdminPortal({
                   className="w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl font-bold text-zinc-900 outline-none text-sm"
                   value={smtpPass ?? ''}
                   onChange={(e) => { smtpDirtyRef.current = true; setSmtpPass(e.target.value); }}
-                  placeholder={smtpConfiguredStatus.hasPass ? '•••••••• (saved on server)' : 'Enter SMTP App Password'}
+                  placeholder={smtpConfiguredStatus.hasPass ? '•••••••• (saved in database)' : 'Enter SMTP App Password'}
                 />
                 <p className="text-[11px] text-zinc-400 mt-1.5">
-                  Stored privately on the server (`data/smtp-config.json`), never in public website snapshots. If using Gmail, generate a 16-char App Password.
+                  Recorded permanently in Firebase Firestore (<code>email_config/smtp</code>) and synced with the backend mail server across deployments. If using Gmail, generate a 16-char App Password.
                 </p>
               </div>
 
@@ -1951,6 +2235,7 @@ export default function AdminPortal({
                               ...prev,
                               configured: Boolean(verifyData.configured),
                               hasPass: Boolean(verifyData.hasPass),
+                              persistedInDatabase: Boolean(verifyData.persistedInDatabase),
                               updatedAt: verifyData.updatedAt
                             }));
                           }
@@ -2081,6 +2366,8 @@ export default function AdminPortal({
               </div>
             </div>
           </div>
+            </>
+          )}
         </div>
       )}
       

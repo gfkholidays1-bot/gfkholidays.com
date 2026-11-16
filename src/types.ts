@@ -184,6 +184,33 @@ export interface EmailHierarchyRule {
   ccBillingDesk: boolean;
 }
 
+export type TransactionalEmailTemplateId =
+  | 'booking_confirmation'
+  | 'invoice_dispatch'
+  | 'flight_inquiry'
+  | 'booking_cancelled';
+
+export interface TransactionalEmailTemplateConfig {
+  id: TransactionalEmailTemplateId;
+  name: string;
+  description: string;
+  subjectTemplate: string;
+  heading: string;
+  badgeText: string;
+  accentColor: string;
+  headerBgColor: string;
+  introText: string;
+  bodyText: string;
+  highlightBoxTitle: string;
+  highlightBoxText: string;
+  ctaLabel: string;
+  footerText: string;
+  showLogo: boolean;
+  showSummaryCard: boolean;
+  editorMode: 'visual' | 'html';
+  customHtml?: string;
+}
+
 export interface Allotment {
   id: string;
   itemId: string; // references package / transport / hotel / ticket ID
@@ -368,6 +395,7 @@ export interface GlobalSettings {
   bookingEmail?: string;
   flightsEmail?: string;
   emailHierarchyRouting?: Partial<Record<ServiceHierarchyKey, EmailHierarchyRule>>;
+  emailTemplates?: Partial<Record<TransactionalEmailTemplateId, TransactionalEmailTemplateConfig>>;
   bookingEmailToken?: string;
   accountsEmailToken?: string;
   partnerMarqueeEnabled?: boolean;
