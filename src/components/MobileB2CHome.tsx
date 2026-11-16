@@ -782,8 +782,8 @@ export default function MobileB2CHome({
         </div>
 
         {/* Foreground Content Over Background Video (Balanced top-to-bottom iPhone fit) */}
-        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-4 pb-5 gap-4">
-          <div className="space-y-2.5">
+        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-4 pb-5 gap-6">
+          <div className="space-y-3">
             <div>
               <p className="text-[10px] font-bold text-emerald-300 tracking-wide uppercase drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
                 {globalSettings.heroBadgeText || 'Licensed Malaysia Destination Operator'}
@@ -797,7 +797,7 @@ export default function MobileB2CHome({
             </div>
 
             {/* Search Input (Excludes Flight Fares — packages, hotels & attractions only) */}
-            <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-1.5">
+            <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-2">
               <form
                 onSubmit={handleSearchSubmit}
                 className="bg-white rounded-xl p-1 shadow-lg border border-white/30 flex items-center gap-1.5"
@@ -857,10 +857,10 @@ export default function MobileB2CHome({
             </div>
           </div>
 
-          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (BIG MOBILE BOXES) */}
-          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-1">
+          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (SLEEK RECTANGULAR BOXES) */}
+          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-2">
             <div className="flex items-baseline justify-between gap-2 mb-3">
-              <h2 className="text-[15px] font-black uppercase tracking-wide text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
+              <h2 className="text-[13px] font-black uppercase tracking-wider text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
                 Explore Travel Services
               </h2>
               <span className="text-[11px] font-bold text-amber-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)] shrink-0">
@@ -868,25 +868,20 @@ export default function MobileB2CHome({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"
                 onClick={() => onNavigate('/search', { category: 'Packages' })}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-md">
-                    <Palmtree className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-sm">
+                  <Palmtree className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Holiday Packages
                   </h3>
-                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
+                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
                     Guided tours &amp; stays
                   </p>
                 </div>
@@ -895,22 +890,17 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/hotels')}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                    <Building2 className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Building2 className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Hotels &amp; Resorts
                   </h3>
-                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
-                    Contracted room rates
+                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
+                    Direct room rates
                   </p>
                 </div>
               </button>
@@ -918,22 +908,17 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/tickets')}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                    <Ticket className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Ticket className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Attraction Tickets
                   </h3>
-                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
-                    Instant gate QR passes
+                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
+                    Instant gate passes
                   </p>
                 </div>
               </button>
@@ -941,22 +926,17 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/flights')}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                    <Plane className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Plane className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Flights
                   </h3>
-                  <p className="text-xs text-sky-200 font-medium leading-snug mt-1">
-                    GFK available &amp; status
+                  <p className="text-[11px] text-sky-200 font-medium leading-tight mt-0.5">
+                    Live GFK allotments
                   </p>
                 </div>
               </button>
@@ -964,22 +944,17 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/transport')}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                    <Car className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Car className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Private Transfers
                   </h3>
-                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
-                    KLIA cabs &amp; chauffeurs
+                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
+                    KLIA cabs &amp; vans
                   </p>
                 </div>
               </button>
@@ -987,21 +962,16 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/restaurants')}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                    <UtensilsCrossed className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <UtensilsCrossed className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Dining &amp; Cruises
                   </h3>
-                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
+                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
                     Food trails &amp; yachts
                   </p>
                 </div>
@@ -1010,21 +980,16 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/cruises')}
-                className="bg-zinc-950/65 hover:bg-zinc-900/80 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/80 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                    <Waves className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
-                    <ChevronRight className="w-4 h-4 text-white/90" />
-                  </span>
+                <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Waves className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
                     Cruises &amp; Yachts
                   </h3>
-                  <p className="text-xs text-zinc-200 font-medium leading-snug mt-1">
+                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
                     Langkawi sunset sails
                   </p>
                 </div>
@@ -1033,26 +998,21 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/marketplaces')}
-                className="bg-emerald-950/80 hover:bg-emerald-900/90 active:scale-[0.98] backdrop-blur-md border border-emerald-400/50 hover:border-amber-400/85 rounded-2xl p-4 text-left transition-all duration-150 cursor-pointer flex flex-col justify-between min-h-[136px] min-w-0 shadow-lg"
+                className="bg-emerald-950/60 hover:bg-emerald-900/75 active:scale-[0.98] backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2 w-full">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-md">
-                    <Globe className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="px-1.5 py-0.5 rounded bg-amber-400 text-zinc-950 text-[9px] font-black uppercase leading-none">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-sm">
+                  <Globe className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1">
+                    <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
+                      Marketplaces
+                    </h3>
+                    <span className="px-1 py-0.5 rounded bg-amber-400 text-zinc-950 text-[8px] font-black uppercase leading-none shrink-0">
                       Hot
                     </span>
-                    <span className="w-8 h-8 rounded-full bg-white/10 border border-white/15 flex items-center justify-center">
-                      <ChevronRight className="w-4 h-4 text-emerald-200" />
-                    </span>
                   </div>
-                </div>
-                <div className="min-w-0 w-full mt-3.5">
-                  <h3 className="text-[15px] font-black text-white leading-snug tracking-tight">
-                    Marketplaces
-                  </h3>
-                  <p className="text-xs text-emerald-200 font-medium leading-snug mt-1">
+                  <p className="text-[11px] text-emerald-200 font-medium leading-tight mt-0.5">
                     Viator · GYG · TripAdvisor
                   </p>
                 </div>
