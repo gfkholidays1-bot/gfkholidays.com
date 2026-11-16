@@ -873,206 +873,176 @@ export default function MalaysiaHome({
           5. Transport Services
           6. Cruises
       ===================================================================== */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-2 w-full">
-        <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-zinc-200/90">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-            <div>
-              <h2 className="text-xl sm:text-2xl font-black text-zinc-950 tracking-tight">
-                Our Services
-              </h2>
-              <p className="text-xs sm:text-sm text-zinc-500 font-medium mt-1">
-                Explore Malaysia&apos;s direct local travel services &amp; available flight allotments
-              </p>
-            </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 self-start sm:self-auto">
-              Direct Local Supplier Rates
-            </span>
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-2 w-full">
+        <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-sm border border-zinc-200/90">
+          <div className="mb-5">
+            <h2 className="text-lg sm:text-xl font-black text-zinc-950 tracking-tight">
+              Our Services
+            </h2>
+            <p className="text-xs sm:text-sm text-zinc-500 font-medium mt-0.5">
+              Direct Malaysia travel services &amp; flight allotments
+            </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5 sm:gap-4">
             {/* SERVICE 1: Day Out & Packages */}
             <button
               type="button"
               onClick={() => onNavigate('/search', { category: 'Packages' })}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-amber-400/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-amber-400/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <Palmtree className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <Palmtree className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 block">
-                  Island &amp; City
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-amber-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-amber-800 transition-colors leading-snug">
                   Day Out &amp; Packages
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   Langkawi, Sabah &amp; KL
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-amber-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-amber-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 2: Hotels & Stays */}
             <button
               type="button"
               onClick={() => onNavigate('/hotels')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <Building2 className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <Building2 className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block">
-                  Direct Rates
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-snug">
                   Hotels &amp; Stays
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   Resorts &amp; 5-Star Rooms
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 3: Restaurants */}
             <button
               type="button"
               onClick={() => onNavigate('/search', { query: 'Dining' })}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-rose-400/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-rose-400/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <UtensilsCrossed className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <UtensilsCrossed className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 block">
-                  Authentic Taste
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-rose-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-rose-800 transition-colors leading-snug">
                   Restaurants
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
-                  Michelin Trails &amp; High-Tea
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
+                  Dining &amp; High-Tea
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-rose-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-rose-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 4: Sightseeing & Attractions */}
             <button
               type="button"
               onClick={() => onNavigate('/tickets')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-purple-400/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-purple-400/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <TicketIcon className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <TicketIcon className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 block">
-                  Instant QR
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-purple-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-purple-800 transition-colors leading-snug">
                   Sightseeing &amp; Attractions
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   Twin Towers &amp; Parks
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-purple-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-purple-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 5: Transport Services */}
             <button
               type="button"
               onClick={() => onNavigate('/transport')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-blue-400/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-blue-400/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <Car className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <Car className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 block">
-                  VIP Fleet
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-blue-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-blue-800 transition-colors leading-snug">
                   Transport Services
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   KLIA Cabs &amp; Chauffeurs
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-blue-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-blue-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 6: Cruises */}
             <button
               type="button"
               onClick={() => onNavigate('/cruises')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-teal-400/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-teal-400/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <Waves className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <Waves className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700 block">
-                  Catamaran
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-teal-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-teal-800 transition-colors leading-snug">
                   Cruises
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   Langkawi &amp; Yachts
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-teal-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-teal-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 7: Available Flights */}
             <button
               type="button"
               onClick={() => onNavigate('/flights')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-sky-400/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-sky-400/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <Plane className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <Plane className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700 block">
-                  GFK Stock
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-sky-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-sky-800 transition-colors leading-snug">
                   Flights
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   Live Status &amp; Seats
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-sky-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-sky-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
 
             {/* SERVICE 8: Marketplace Booking (Viator, TripAdvisor, GetYourGuide, Klook + Trending) */}
             <button
               type="button"
               onClick={() => onNavigate('/marketplaces')}
-              className="group relative bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-2xl p-4 sm:p-5 text-left shadow-xs hover:shadow-lg transition-all duration-150 cursor-pointer flex items-center gap-3.5 min-h-[112px]"
+              className="group relative w-full aspect-[16/9] bg-zinc-50/80 hover:bg-white border border-zinc-200/80 hover:border-emerald-500/80 rounded-xl p-3.5 lg:p-4 text-left shadow-xs hover:shadow-md transition-all duration-150 cursor-pointer flex items-center gap-3 min-w-0"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-150">
-                <Globe className="w-6 h-6 stroke-[2.2]" />
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform duration-150">
+                <Globe className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 inline-flex items-center gap-1">
-                  <Flame className="w-3 h-3 shrink-0" />
-                  Trending
-                </span>
-                <h3 className="text-sm sm:text-base font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-snug mt-0.5">
+                <h3 className="text-xs lg:text-sm font-black text-zinc-950 group-hover:text-emerald-800 transition-colors leading-snug">
                   Marketplace Booking
                 </h3>
-                <p className="text-xs text-zinc-500 font-medium truncate mt-0.5">
+                <p className="hidden sm:block text-[11px] lg:text-xs text-zinc-500 font-medium truncate mt-0.5">
                   Viator, TripAdvisor &amp; GYG
                 </p>
               </div>
-              <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
+              <ArrowRight className="hidden lg:block w-4 h-4 text-zinc-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all duration-150 shrink-0" />
             </button>
           </div>
         </div>

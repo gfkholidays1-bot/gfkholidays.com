@@ -781,14 +781,14 @@ export default function MobileB2CHome({
           <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/35 via-zinc-950/10 to-zinc-950/45 pointer-events-none" />
         </div>
 
-        {/* Foreground Content Over Background Video (Balanced top-to-bottom iPhone fit) */}
-        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-4 pb-5 gap-6">
-          <div className="space-y-3">
+        {/* Foreground Content Over Background Video (Universal iPhone/Android balanced fit) */}
+        <div className="relative z-20 flex-1 flex flex-col justify-between px-3.5 pt-3.5 pb-4 gap-3.5">
+          <div className="space-y-2.5">
             <div>
               <p className="text-[10px] font-bold text-emerald-300 tracking-wide uppercase drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
                 {globalSettings.heroBadgeText || 'Licensed Malaysia Destination Operator'}
               </p>
-              <h1 className="text-white text-[19px] sm:text-xl font-extrabold tracking-tight leading-[1.14] mt-0.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.75)]">
+              <h1 className="text-white text-[18px] sm:text-xl font-extrabold tracking-tight leading-[1.15] mt-0.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.75)]">
                 <span className="font-serif italic font-semibold text-amber-300 block">
                   {globalSettings.heroTitleLine1 || 'Experience Truly Asia:'}
                 </span>
@@ -797,7 +797,7 @@ export default function MobileB2CHome({
             </div>
 
             {/* Search Input (Excludes Flight Fares — packages, hotels & attractions only) */}
-            <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-2">
+            <div id="mobile-search-section" data-aistudio-editable="true" className="space-y-1.5">
               <form
                 onSubmit={handleSearchSubmit}
                 className="bg-white rounded-xl p-1 shadow-lg border border-white/30 flex items-center gap-1.5"
@@ -857,165 +857,115 @@ export default function MobileB2CHome({
             </div>
           </div>
 
-          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (SLEEK RECTANGULAR BOXES) */}
-          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-2">
-            <div className="flex items-baseline justify-between gap-2 mb-3">
-              <h2 className="text-[13px] font-black uppercase tracking-wider text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
-                Explore Travel Services
-              </h2>
-              <span className="text-[11px] font-bold text-amber-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)] shrink-0">
-                Direct Operator Rates
-              </span>
-            </div>
+          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (16:9 RECTANGULAR TILES) */}
+          <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-1">
+            <h2 className="text-xs font-extrabold uppercase tracking-wider text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)] mb-2.5">
+              Explore Travel Services
+            </h2>
 
             <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"
                 onClick={() => onNavigate('/search', { category: 'Packages' })}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-sm">
-                  <Palmtree className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-xs">
+                  <Palmtree className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Holiday Packages
-                  </h3>
-                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
-                    Guided tours &amp; stays
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Holiday Packages
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/hotels')}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <Building2 className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Building2 className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Hotels &amp; Resorts
-                  </h3>
-                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
-                    Direct room rates
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Hotels &amp; Resorts
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/tickets')}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <Ticket className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Ticket className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Attraction Tickets
-                  </h3>
-                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
-                    Instant gate passes
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Attraction Tickets
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/flights')}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <Plane className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Plane className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Flights
-                  </h3>
-                  <p className="text-[11px] text-sky-200 font-medium leading-tight mt-0.5">
-                    Live GFK allotments
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Flights
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/transport')}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <Car className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Car className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Private Transfers
-                  </h3>
-                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
-                    KLIA cabs &amp; vans
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Private Transfers
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/restaurants')}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <UtensilsCrossed className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <UtensilsCrossed className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Dining &amp; Cruises
-                  </h3>
-                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
-                    Food trails &amp; yachts
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Dining &amp; Cruises
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/cruises')}
-                className="bg-zinc-950/40 hover:bg-zinc-900/60 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/75 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <Waves className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Waves className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                    Cruises &amp; Yachts
-                  </h3>
-                  <p className="text-[11px] text-zinc-200/95 font-medium leading-tight mt-0.5">
-                    Langkawi sunset sails
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Cruises &amp; Yachts
+                </h3>
               </button>
 
               <button
                 type="button"
                 onClick={() => onNavigate('/marketplaces')}
-                className="bg-emerald-950/60 hover:bg-emerald-900/75 active:scale-[0.98] backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl px-3 py-3 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[72px] min-w-0 shadow-sm"
+                className="w-full aspect-[16/9] bg-emerald-950/60 hover:bg-emerald-900/75 active:scale-[0.98] backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
               >
-                <div className="w-10 h-10 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-sm">
-                  <Globe className="w-5 h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-xs">
+                  <Globe className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1">
-                    <h3 className="text-[13px] font-extrabold text-white leading-tight tracking-tight">
-                      Marketplaces
-                    </h3>
-                    <span className="px-1 py-0.5 rounded bg-amber-400 text-zinc-950 text-[8px] font-black uppercase leading-none shrink-0">
-                      Hot
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-emerald-200 font-medium leading-tight mt-0.5">
-                    Viator · GYG · TripAdvisor
-                  </p>
-                </div>
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                  Marketplaces
+                </h3>
               </button>
             </div>
           </div>
