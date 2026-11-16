@@ -857,22 +857,22 @@ export default function MobileB2CHome({
             </div>
           </div>
 
-          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (16:9 RECTANGULAR TILES) */}
+          {/* EXPLORE TRAVEL SERVICES IN FRONT OF BACKGROUND VIDEO (UNIVERSAL RECTANGULAR TILES) */}
           <div id="mobile-services-grid" data-aistudio-editable="true" className="pt-1">
-            <h2 className="text-xs font-extrabold uppercase tracking-wider text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)] mb-2.5">
+            <h2 className="text-xs font-extrabold uppercase tracking-wider text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)] mb-2">
               Explore Travel Services
             </h2>
 
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => onNavigate('/search', { category: 'Packages' })}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-amber-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-xs">
-                  <Palmtree className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-amber-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-xs">
+                  <Palmtree className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Holiday Packages
                 </h3>
               </button>
@@ -880,12 +880,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/hotels')}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-emerald-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Building2 className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Building2 className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Hotels &amp; Resorts
                 </h3>
               </button>
@@ -893,12 +893,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/tickets')}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-purple-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Ticket className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Ticket className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Attraction Tickets
                 </h3>
               </button>
@@ -906,12 +906,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/flights')}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-sky-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Plane className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Plane className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Flights
                 </h3>
               </button>
@@ -919,12 +919,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/transport')}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-blue-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Car className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Car className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Private Transfers
                 </h3>
               </button>
@@ -932,12 +932,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/restaurants')}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-rose-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <UtensilsCrossed className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <UtensilsCrossed className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Dining &amp; Cruises
                 </h3>
               </button>
@@ -945,12 +945,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/cruises')}
-                className="w-full aspect-[16/9] bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/75 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-zinc-950/45 hover:bg-zinc-900/65 active:scale-[0.98] backdrop-blur-md border border-white/25 hover:border-teal-400/75 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Waves className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Waves className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Cruises &amp; Yachts
                 </h3>
               </button>
@@ -958,12 +958,12 @@ export default function MobileB2CHome({
               <button
                 type="button"
                 onClick={() => onNavigate('/marketplaces')}
-                className="w-full aspect-[16/9] bg-emerald-950/60 hover:bg-emerald-900/75 active:scale-[0.98] backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl px-3 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-w-0 shadow-sm"
+                className="bg-emerald-950/60 hover:bg-emerald-900/75 active:scale-[0.98] backdrop-blur-md border border-emerald-400/45 hover:border-amber-400/80 rounded-xl px-2.5 py-2 text-left transition-all duration-150 cursor-pointer flex items-center gap-2.5 min-h-[56px] min-w-0 shadow-sm"
               >
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-xs">
-                  <Globe className="w-[18px] h-[18px] sm:w-5 sm:h-5 stroke-[2.2]" />
+                <div className="w-9 h-9 rounded-lg bg-emerald-500 text-zinc-950 flex items-center justify-center shrink-0 shadow-xs">
+                  <Globe className="w-[18px] h-[18px] stroke-[2.2]" />
                 </div>
-                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-snug tracking-tight min-w-0">
+                <h3 className="text-[12.5px] sm:text-[13px] font-bold text-white leading-tight tracking-tight min-w-0">
                   Marketplaces
                 </h3>
               </button>
